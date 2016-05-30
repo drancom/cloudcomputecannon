@@ -54,6 +54,7 @@
     "express-bunyan-logger": "^1.2.0",
     "fluent-logger": "^1.1.1",
     "fs-extended": "^0.2.1",
+    "hiredis": "^0.4.1",
     "http-proxy": "^1.13.3",
     "node-uuid": "^1.4.7",
     "node-vagrant": "^1.0.6",
