@@ -17,20 +17,6 @@ import promhx.RedisPromises;
 import promhx.deferred.DeferredPromise;
 import promhx.deferred.DeferredStream;
 
-@:enum
-abstract PubSubChannel(String)
-{
-    var AvailableInstances = 'compute_instances';
-}
-
-typedef WorkerInstance=Dynamic;
-
-typedef RedisConnection = {
-	@:optional var port :Int;
-	@:optional var address :String;
-	@:optional var options :Dynamic;
-}
-
 class RedisTools
 {
 	public static function createStreamFromHash<T>(redis :RedisClient, channelKey :String, hashKey :String, hashField :String) :Stream<T>
