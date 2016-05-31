@@ -68,6 +68,9 @@ class RedisTools
 		return createSubscribeStreamInternal(redis, channelKey, true);
 	}
 
+	/**
+	 * Call end() on this stream to remove it from the singleton source.
+	 */
 	static function getSubscribeStreamInternal<T>(redis :RedisClient, channelKey :String, ?usePatterns :Bool = false) :Stream<T>
 	{
 		var subscribeClient = RedisClient.createClient(redis.connectionOption.port, redis.connectionOption.host);
