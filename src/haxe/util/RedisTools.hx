@@ -19,6 +19,26 @@ import promhx.deferred.DeferredStream;
 
 class RedisTools
 {
+	static var SUBSCRIBE_CLIENT = new Map<String, RedisClient>();
+	static var PSUBSCRIBE_CLIENT = new Map<String, RedisClient>();
+
+	static var SUBSCRIBE_CLIENT_COUNT = new Map<String, Int>();
+	static var PSUBSCRIBE_CLIENT_COUNT = new Map<String, Int>();
+
+	static function getSubscribeClient(channel :String) :RedisClient
+	{
+		if (!SUBSCRIBE_CLIENT.exists(channel)) {
+
+		}
+		SUBSCRIBE_CLIENT_COUNT[channel] = SUBSCRIBE_CLIENT_COUNT[channel] + 1;
+		return SUBSCRIBE_CLIENT[channel];
+	}
+
+	static function releaseSubscribeClient(channel :String) :RedisClient
+	{
+		
+	}
+
 	public static function createStreamFromHash<T>(redis :RedisClient, channelKey :String, hashKey :String, hashField :String) :Stream<T>
 	{
 		return createStreamCustom(redis, channelKey, function(_) {
@@ -40,6 +60,84 @@ class RedisTools
 	{
 		var subscribeClient = RedisClient.createClient(redis.connectionOption.port, redis.connectionOption.host);
 		return createStreamCustomInternal(subscribeClient, channelKey, getter, usePatterns);
+	}
+
+	public static function createSubscribeStream<T>(subscribeClient :RedisClient, channelKey :String) :Stream<T>
+	{
+		return createSubscribeStreamInternal(subscribeClient, channelKey, false);
+	}
+
+	public static function createPSubscribeStream<T>(subscribeClient :RedisClient, channelKey :String) :Stream<T>
+	{
+		return createSubscribeStreamInternal(subscribeClient, channelKey, true);
+	}
+
+	static function createSubscribeStreamInternal<T>(subscribeClient :RedisClient, channelKey :String, ?usePatterns :Bool = false) :Stream<T>
+	{
+		Assert.notNull(subscribeClient);
+		Assert.notNull(channelKey);
+
+		var deferred = new promhx.deferred.DeferredStream<T>();
+		var unsubscribed = false;
+
+		function getAndSend(message :Dynamic) {
+			if (!unsubscribed) {
+				if (getter != null) {
+					getter(message)
+						.then(function(val :T) {
+							if (val != null) {
+								deferred.resolve(val);
+							}
+						});
+				} else {
+					deferred.resolve(message);
+				}
+			}
+		}
+
+		if (usePatterns) {
+			subscribeClient.on(RedisClient.EVENT_PMESSAGE, function (pattern, channel, message) {
+				deferred.resolve(message);
+			});
+		} else {
+			subscribeClient.on(RedisClient.EVENT_MESSAGE, function (channel, message) {
+				deferred.resolve(message);
+			});
+		}
+
+		if (usePatterns) {
+			subscribeClient.psubscribe(channelKey);
+		} else {
+			subscribeClient.subscribe(channelKey);
+		}
+
+		deferred.boundStream.endThen(function(_) {
+			unsubscribed = true;
+			if (usePatterns) {
+				subscribeClient.punsubscribe(channelKey);
+			} else {
+				subscribeClient.unsubscribe(channelKey);
+			}
+			subscribeClient.quit();
+		});
+
+		subscribeClient.on(RedisEvent.Error, function(err) {
+			Log.error({error:err, system:'redis', event:RedisEvent.Error, message:'subscribeClient'});
+			subscribeClient.once(RedisEvent.Connect, getAndSend.bind(null));
+		});
+
+		if (usePatterns) {
+			subscribeClient.once(RedisClient.EVENT_PSUBSCRIBE, function (channel, count) {
+				Log.debug('Redis psubscribed to $channel');
+			});
+		} else {
+			subscribeClient.once(RedisClient.EVENT_SUBSCRIBE, function (channel, count) {
+				Log.debug('Redis subscribed to $channel');
+			});
+		}
+
+		
+		return deferred.boundStream;
 	}
 
 	public static function createStreamCustomInternal<T>(subscribeClient :RedisClient, channelKey :String, ?getter :Dynamic->Promise<T>, ?usePatterns :Bool = false) :Stream<T>
