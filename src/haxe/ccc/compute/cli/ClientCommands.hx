@@ -97,8 +97,8 @@ class ClientCommands
 		doc:'Run docker job(s) on the compute provider.',
 		args:{
 			command: {doc:'Command to run in the docker container, specified as a JSON String Array, e.g. \'["echo", "foo"]\''},
-			directory: {doc: 'Path to directory containing the job definition', short:'d'},
-			image: {doc: 'Docker image name [ubuntu:14.04]', short: 'm'},
+			// context: {doc: 'Path to directory containing a docker context. Cannot be combined with --image.', short:'d'},
+			image: {doc: 'Docker image name [busybox:latest]. Cannot be combined with --context.', short: 'm'},
 			count: {doc: 'Number of job repeats [1]', short: 'n'},
 			input: {doc:'Input values (decoded into JSON values) [input]. E.g.: --input foo1=SomeString --input foo2=2 --input foo3="[1,2,3,4]". ', short:'i'},
 			inputfile: {doc:'Input files [inputfile]. E.g. --inputfile foo1=/home/user1/Desktop/test.jpg" --input foo2=/home/me/myserver/myfile.txt ', short:'f'},
@@ -110,7 +110,7 @@ class ClientCommands
 	public static function runclient(
 		command :Array<String>,
 		?image :String,
-		?directory :String,
+		// ?context :String,
 		?input :Array<String>,
 		?inputfile :Array<String>,
 		?inputurl :Array<String>,

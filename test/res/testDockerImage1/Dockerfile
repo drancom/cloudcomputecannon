@@ -1,11 +1,4 @@
-# Python Dockerfile
-FROM ubuntu:14.04
-
-# Install Python.
-RUN \
-  apt-get update && \
-  apt-get install -y python && \
-  rm -rf /var/lib/apt/lists/*
+FROM python:2.7.11-alpine
 
 # Define working directory.
 ENV app /app
