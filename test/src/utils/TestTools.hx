@@ -7,7 +7,6 @@ import js.node.Path;
 import js.node.Fs;
 import js.node.Http;
 import js.npm.FsPromises;
-import js.npm.HttpPromises;
 import js.npm.FsExtended;
 import js.npm.RedisClient;
 

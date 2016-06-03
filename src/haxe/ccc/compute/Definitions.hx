@@ -1,5 +1,7 @@
 package ccc.compute;
 
+import haxe.extern.EitherType;
+
 #if (nodejs && !macro)
 	import js.npm.Docker;
 	import js.npm.Ssh;
@@ -319,6 +321,17 @@ typedef JobResult = {
 	@:optional var error :Dynamic;
 }
 
+typedef JobResultFull = {
+	var id :JobId;
+	var status :JobFinishedStatus;
+	var exitCode :Int;
+	var stdout :Array<String>;
+	var stderr :Array<String>;
+	@:optional var inputs :TypedDynamicObject<String,Array<String>>;
+	@:optional var outputs :TypedDynamicObject<String,Array<String>>;
+	@:optional var error :Dynamic;
+}
+
 
 /**
  *********************************************
@@ -390,6 +403,7 @@ abstract JobCLICommand(String) from String {
 	var ExitCode = 'exitcode';
 	var Kill = 'kill';
 	var Result = 'result';
+	var ResultFull = 'result-full';
 	var Definition = 'definition';
 	var JobStats = 'stats';
 	var Time = 'time';

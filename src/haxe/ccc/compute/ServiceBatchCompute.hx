@@ -15,6 +15,7 @@ import promhx.Promise;
 	import js.node.stream.Readable;
 	import js.node.Http;
 	import js.node.http.*;
+	import js.node.http.ServerResponse;
 	import js.npm.Docker;
 	import js.npm.Busboy;
 	import js.npm.Ssh;
@@ -90,7 +91,7 @@ class ServiceBatchCompute
 			'image': {'doc': 'Docker image name [ubuntu:14.04].'},
 			'inputs': {'doc': 'Docker image name [ubuntu:14.04].'},
 			'workingDir': {'doc': 'The current working directory for the process in the docker container.'},
-			'cpus': {'doc': 'Minimum number of CPUs required for this process.'},
+			'cpus': {'doc': 'Minimum number of CPUs required for this process [1].'},
 			'maxDuration': {'doc': 'Maximum time (in seconds) this job will be allowed to run before being terminated.'},
 			'resultsPath': {'doc': 'Custom path on the storage service for the generated job.json, stdout, and stderr files.'},
 			'inputsPath': {'doc': 'Custom path on the storage service for the inputs files.'},
@@ -134,9 +135,9 @@ class ServiceBatchCompute
 
 	@rpc({
 		alias: 'job',
-		doc: 'Commands to query jobs [remove | kill | result | status | exitcode | stats | definition | time]',
+		doc: 'Commands to query jobs [remove | kill | result | result-full |status | exitcode | stats | definition | time]',
 		args: {
-			'command': {'doc':'Command to run in the docker container [remove | kill | result | status | exitcode | stats | definition | time]'},
+			'command': {'doc':'Command to run in the docker container [remove | kill | result | result-full | status | exitcode | stats | definition | time]'},
 			'jobId': {'doc': 'Job Id(s)'},
 			'json': {'doc': 'Output is JSON instead of human readable [true]'},
 		},
@@ -178,7 +179,7 @@ class ServiceBatchCompute
 	{
 #if (nodejs && !macro)
 		switch(command) {
-			case Remove,Kill,Status,Result,ExitCode,Definition,JobStats,Time:
+			case Remove,Kill,Status,Result,ResultFull,ExitCode,Definition,JobStats,Time:
 			default:
 				return Promise.promise(cast {error:'Unrecognized job subcommand=\'$command\' [remove | kill | result | status | exitcode | stats | definition | time]'});
 		}
@@ -195,6 +196,8 @@ class ServiceBatchCompute
 					getStatus(_redis, job);
 				case Result:
 					getJobResults(_redis, _fs, job);
+				case ResultFull:
+					getJobResultsFull(_redis, _fs, job);
 				case ExitCode:
 					getExitCode(_redis, _fs, job);
 				case JobStats:
@@ -219,63 +222,8 @@ class ServiceBatchCompute
 								return null;
 							}
 						});
-				// case Stdout:
-				// 	getJobResults(job)
-				// 		.pipe(function(jobResults) {
-				// 			if (jobResults == null) {
-				// 				return Promise.promise(null);
-				// 			} else {
-				// 				return ComputeQueue.getJob(_redis, job)
-				// 					.pipe(function(jobDef :DockerJobDefinition) {
-				// 						var externalBaseUrl = fs.getExternalUrl();
-				// 						if (externalBaseUrl == null || externalBaseUrl == '') {
-				// 							_fs.
-				// 						} else {
-
-				// 						}
-				// 						trace('jobDef=${jobDef}');
-				// 					});
 				case Definition:
 					getJobDefinition(_redis, _fs, job);
-				// trace('Description');
-				// return ComputeQueue.getStatus(_redis, job)
-				// 	// .pipe(function(status) {
-				// 	// 	return 
-				// 		getJobDefinition(jobId)
-				// 			.pipe(function(jobdef :DockerJobDefinition) {
-								
-				// 				var jobDefCopy = Reflect.copy(jobdef);
-				// 				jobDefCopy.inputsPath = _fs.getExternalUrl(JobTools.inputDir(jobdef));
-				// 				jobDefCopy.outputsPath = _fs.getExternalUrl(JobTools.outputDir(jobdef));
-				// 				jobDefCopy.resultsPath = _fs.getExternalUrl(JobTools.resultDir(jobdef));
-				// 				var result :JobDescriptionComplete = {
-				// 					definition: jobDefCopy,
-				// 					status: status
-				// 				}
-				// 				trace('  result=$result');
-
-				// 				var resultsJsonPath = JobTools.resultJsonPath(jobDefCopy);
-				// 				return _fs.exists(resultsJsonPath)
-				// 					.pipe(function(exists) {
-				// 						if (exists) {
-				// 							return _fs.readFile(resultsJsonPath)
-				// 								.pipe(function(stream) {
-				// 									if (stream != null) {
-				// 										return StreamPromises.streamToString(stream)
-				// 											.then(function(resultJsonString) {
-				// 												result.result = Json.parse(resultJsonString);
-				// 												return result;
-				// 											});
-				// 									} else {
-				// 										return Promise.promise(result);
-				// 									}
-				// 								});
-				// 						} else {
-				// 							return Promise.promise(result);
-				// 						}
-				// 					});
-				// 			});
-				// 	});
 			}
 		}
 
@@ -287,56 +235,6 @@ class ServiceBatchCompute
 				}
 				return result;
 			});
-
-		// return switch(command) {
-		// 	case Kill:
-				
-
-		
-			// case Description:
-			// 	trace('getJobDefinition');
-			// 	return ComputeQueue.getStatus(_redis, job)
-			// 		.pipe(function(status) {
-			// 			return getJobDefinition(jobId)
-			// 				.pipe(function(jobdef :DockerJobDefinition) {
-								
-			// 					var jobDefCopy = Reflect.copy(jobdef);
-			// 					jobDefCopy.inputsPath = _fs.getExternalUrl(JobTools.inputDir(jobdef));
-			// 					jobDefCopy.outputsPath = _fs.getExternalUrl(JobTools.outputDir(jobdef));
-			// 					jobDefCopy.resultsPath = _fs.getExternalUrl(JobTools.resultDir(jobdef));
-			// 					var result :JobDescriptionComplete = {
-			// 						definition: jobDefCopy,
-			// 						status: status
-			// 					}
-			// 					trace('  result=$result');
-
-			// 					var resultsJsonPath = JobTools.resultJsonPath(jobDefCopy);
-			// 					return _fs.exists(resultsJsonPath)
-			// 						.pipe(function(exists) {
-			// 							if (exists) {
-			// 								return _fs.readFile(resultsJsonPath)
-			// 									.pipe(function(stream) {
-			// 										if (stream != null) {
-			// 											return StreamPromises.streamToString(stream)
-			// 												.then(function(resultJsonString) {
-			// 													result.result = Json.parse(resultJsonString);
-			// 													return result;
-			// 												});
-			// 										} else {
-			// 											return Promise.promise(result);
-			// 										}
-			// 									});
-			// 							} else {
-			// 								return Promise.promise(result);
-			// 							}
-			// 						});
-			// 				});
-			// 		});
-		// 	default:
-		// 		// Log.error('Unrecognized job subcommand=$command. Allowed [results]');
-		// 		throw 'Unrecognized job subcommand=$command. Allowed [kill|results]';
-		// 		Promise.promise(null);
-		// }
 #else
 		return Promise.promise(null);
 #end
@@ -383,12 +281,22 @@ class ServiceBatchCompute
 
 	function buildDockerImageRouter(req :IncomingMessage, res :ServerResponse, next :?Dynamic->Void) :Void
 	{
+		var isFinished = false;
+		res.on(ServerResponseEvent.Finish, function() {
+			isFinished = true;
+		});
 		function returnError(err :String, ?statusCode :Int = 400) {
-			res.setHeader("content-type","application/json-rpc");
-			res.writeHead(statusCode);
-			res.end(Json.stringify({
-				error: err
-			}));
+			if (isFinished) {
+				Log.error('Already returned ');
+				Log.error(err);
+			} else {
+				isFinished = true;
+				res.setHeader("content-type","application/json-rpc");
+				res.writeHead(statusCode);
+				res.end(Json.stringify({
+					error: err
+				}));
+			}
 		}
 
 		var repositoryString :String = untyped req.params[0];
@@ -417,12 +325,13 @@ class ServiceBatchCompute
 		res.on('error', function(err) {
 			Log.error({error:err});
 		});
+		res.writeHead(200);
 		ServerCommands.buildImageIntoRegistry(req, repository, res)
 			.then(function(imageUrl) {
-				js.Node.setTimeout(function() {
-					res.writeHead(200);
-					res.end(imageUrl);
-				}, 5000);
+				// js.Node.setTimeout(function() {
+					isFinished = true;
+					res.end(Json.stringify({image:imageUrl}));
+				// }, 5000);
 			})
 			.catchError(function(err) {
 				returnError('Failed to build image err=$err', 500);
@@ -434,6 +343,11 @@ class ServiceBatchCompute
 		if (job == null) {
 			throw 'Null job argument in ServiceBatchCompute.run(...)';
 		}
+
+		if (job.parameters.cpus < 1) {
+			throw 'Invalid number of cpus, must be >= 1';
+		}
+
 		var jobId :JobId = null;
 		var deleteInputs :Void->Promise<Bool> = null;
 

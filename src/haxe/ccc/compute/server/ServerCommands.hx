@@ -170,8 +170,8 @@ class ServerCommands
 				log.debug({step:'pushed_now_verifying', repository:remoteImageUrl.repository, tag:localImageUrl.tag});
 				return DockerRegistryTools.isImageIsRegistry(registryAddress, remoteImageUrl.repository, localImageUrl.tag)
 					.then(function(exists) {
-						log.debug({step:'verified', exists:exists, repository:remoteImageUrl.repository, tag:localImageUrl.tag});
 						localImageUrl.registryhost = ConnectionToolsRegistry.getRegistryAddress();
+						log.debug({step:'verified', exists:exists, repository:remoteImageUrl.repository, tag:localImageUrl.tag, returning:localImageUrl});
 						return localImageUrl;
 					});
 			});
@@ -331,6 +331,97 @@ class ServerCommands
 							} else {
 								return Promise.promise(null);
 							}
+						});
+				}
+			});
+	}
+
+	/**
+	 * Full inline output of the job. No need to download further.
+	 * @param  redis :RedisClient    [description]
+	 * @param  fs    :ServiceStorage [description]
+	 * @param  jobId :JobId          [description]
+	 * @return       [description]
+	 */
+	public static function getJobResultsFull(redis :RedisClient, fs :ServiceStorage, jobId :JobId) :Promise<JobResultFull>
+	{
+		return getJobResults(redis, fs, jobId)
+			.pipe(function(jobResult :JobResult) {
+				if (jobResult == null) {
+					return Promise.promise(null);
+				} else {
+					var jobResultFull :JobResultFull = {
+						id: jobResult.id,
+						status: jobResult.status,
+						exitCode: jobResult.exitCode,
+						stdout: null,
+						stderr: null,
+						inputs: {},
+						outputs: {}
+					}
+
+					function getUrl(url :String) :Promise<String> {
+						if (url.startsWith('http')) {
+							return RequestPromises.get(url);
+						} else {
+							return fs.readFile(url)
+								.pipe(function(stream) {
+									return StreamPromises.streamToString(stream);
+								})
+								.errorPipe(function(err) {
+									return Promise.promise(Std.string(err));
+								});
+						}
+					}
+
+					var promises = [];
+					if (jobResult.stdout != null) {
+						promises.push(getUrl(jobResult.stdout)
+							.then(function(stdout) {
+								if (stdout != null) {
+									jobResultFull.stdout = stdout.split('\n');
+								}
+								return true;
+							}));
+					}
+
+					if (jobResult.stderr != null) {
+						promises.push(getUrl(jobResult.stderr)
+							.then(function(stderr) {
+								if (stderr != null) {
+									jobResultFull.stderr = stderr.split('\n');
+								}
+								return true;
+							}));
+					}
+
+					if (jobResult.inputs != null) {
+						for (input in jobResult.inputs) {
+							promises.push(getUrl('${jobResult.inputsBaseUrl}/$input')
+								.then(function(inputText) {
+									if (inputText != null) {
+										Reflect.setField(jobResultFull.inputs, input, inputText.split('\n'));
+									}
+									return true;
+								}));
+						}
+					}
+
+					if (jobResult.outputs != null) {
+						for (output in jobResult.outputs) {
+							promises.push(getUrl('${jobResult.outputsBaseUrl}/$output')
+								.then(function(outputText) {
+									if (outputText != null) {
+										Reflect.setField(jobResultFull.outputs, output, outputText.split('\n'));
+									}
+									return true;
+								}));
+						}
+					}
+
+					return Promise.whenAll(promises)
+						.then(function(_) {
+							return jobResultFull;
 						});
 				}
 			});
