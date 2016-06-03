@@ -7,3 +7,4 @@ Planned features:
  - CLI/Remote API to show job stdout/err
  - CLI to auto set up a local stack.
  - CLI assumes local stack.
+ - Remote setup: create a VPC, security groups, port access, etc with a single command. How will users work here?
