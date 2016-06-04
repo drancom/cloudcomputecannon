@@ -295,7 +295,9 @@ class ClientCommands
 	{
 		return buildDockerImageInternal(path, repository, output ? Node.process.stdout : null)
 			.then(function(response) {
-				console.log(Json.stringify({image:response}, null, '\t'));
+				if (!output) {
+					console.log(Json.stringify({image:response}, null, '\t'));
+				}
 				return CLIResult.Success;
 			})
 			.errorPipe(function(err) {
