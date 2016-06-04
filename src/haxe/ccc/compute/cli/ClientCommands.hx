@@ -785,7 +785,7 @@ class ClientCommands
 
 	@rpc({
 		alias:'test',
-		doc:'Test a simple job with a cloud-compute-cannon server'
+		doc:'Test a build->run->output with a cloud-compute-cannon server'
 	})
 	public static function test() :Promise<CLIResult>
 	{
