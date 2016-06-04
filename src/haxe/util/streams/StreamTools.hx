@@ -9,7 +9,7 @@ import js.node.Buffer;
 
 class StreamTools
 {
-	public static function createTransformStream(f :EitherType<Buffer,String>->String->(js.Error->EitherType<String,Buffer>->Void)->Void, ?options:DuplexNewOptions) :IDuplex
+	public static function createTransformStream(f :EitherType<Buffer,String>->String->(js.Error->EitherType<Buffer,String>->Void)->Void, ?options:DuplexNewOptions) :IDuplex
 	{
 		var transform :Transform<Dynamic> = untyped __js__('new require("stream").Transform({0})', options);
 		untyped transform._transform = f;

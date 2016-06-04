@@ -3,6 +3,7 @@ package util;
 import haxe.Json;
 
 import js.Node;
+import js.node.Buffer;
 import js.node.Fs;
 import js.node.stream.Readable;
 import js.node.stream.Writable;
@@ -378,7 +379,7 @@ class DockerTools
 		log = Logger.ensureLog(log, {image:imageName, tag:tag, dockerhost:docker.modem.host});
 		var promise = new DeferredPromise();
 		var image = docker.getImage(imageName);
-		image.push({tag:tag}, function(err, stream :IWritable) {
+		image.push({tag:tag}, function(err, stream :IReadable) {
 			if (err != null) {
 				log.error({log:'error pushing $imageName', error:err});
 				promise.boundPromise.reject(err);
@@ -390,12 +391,12 @@ class DockerTools
 			stream.on(ReadableEvent.Error, function(err) {
 				promise.boundPromise.reject(err);
 			});
-			stream.on(ReadableEvent.Data, function(buf :js.node.Buffer) {
+			stream.on(ReadableEvent.Data, function(buf :Buffer) {
 				if (resultStream != null && buf != null) {
 					resultStream.write(buf);
 				}
-				var bufferString = buf.toString();
-				log.trace({log:bufferString});
+				// var bufferString = buf.toString();
+				// log.trace({log:bufferString});
 			});
 		});
 		return promise.boundPromise;

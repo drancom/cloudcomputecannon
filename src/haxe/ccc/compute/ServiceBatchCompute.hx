@@ -38,6 +38,7 @@ import promhx.Promise;
 	import ccc.storage.StorageTools;
 
 	import util.DockerTools;
+	import util.streams.StreamTools;
 
 	using Lambda;
 	using StringTools;
@@ -286,6 +287,7 @@ class ServiceBatchCompute
 			isFinished = true;
 		});
 		function returnError(err :String, ?statusCode :Int = 400) {
+			Log.error(err);
 			if (isFinished) {
 				Log.error('Already returned ');
 				Log.error(err);
@@ -326,12 +328,14 @@ class ServiceBatchCompute
 			Log.error({error:err});
 		});
 		res.writeHead(200);
-		ServerCommands.buildImageIntoRegistry(req, repository, res)
+		var throughStream = StreamTools.createTransformStream(function(chunk, encoding, forwarder) {
+			res.write(chunk);
+			forwarder(null, chunk);
+		});
+		ServerCommands.buildImageIntoRegistry(req, repository, throughStream)
 			.then(function(imageUrl) {
-				// js.Node.setTimeout(function() {
-					isFinished = true;
-					res.end(Json.stringify({image:imageUrl}));
-				// }, 5000);
+				isFinished = true;
+				res.end(Json.stringify({image:imageUrl}), 'utf8');
 			})
 			.catchError(function(err) {
 				returnError('Failed to build image err=$err', 500);

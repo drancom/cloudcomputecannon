@@ -285,11 +285,17 @@ class ClientCommands
 	@rpc({
 		alias:'image-build',
 		doc:'Build a docker image from a context (directory containing a Dockerfile).',
+		args:{
+			path: {doc: 'Path to the directory containing a Dockerfile'},
+			repository: {doc: 'Docker repository name and tag. E.g. myname/myimage:myversion.'},
+			output: {doc: 'Show the docker build output stream'}
+		}
 	})
-	public static function buildDockerImage(path :String, repository :String) :Promise<CLIResult>
+	public static function buildDockerImage(path :String, repository :String, ?output :Bool = false) :Promise<CLIResult>
 	{
-		return buildDockerImageInternal(path, repository, Node.process.stdout)
+		return buildDockerImageInternal(path, repository, output ? Node.process.stdout : null)
 			.then(function(response) {
+				console.log(Json.stringify({image:response}, null, '\t'));
 				return CLIResult.Success;
 			})
 			.errorPipe(function(err) {
@@ -970,7 +976,6 @@ class ClientCommands
 	public static function buildDockerImageInternal(path :String, repository :String, stdoutStream :IWritable) :Promise<String>
 	{
 		var host = getHost();
-		// var log = Logger.log.child({f:'buildDockerImageInternal', path:path, repository:repository, host:host});
 		var tarStream = js.npm.TarFs.pack(path);
 		var url = 'http://${host}$SERVER_URL_API_DOCKER_IMAGE_BUILD/$repository';
 		function onError(err :Error) {
@@ -986,7 +991,7 @@ class ClientCommands
 					responsePromise.resolve(imageUrl);
 				});
 
-				var t = function(chunk :String, encoding :String, cb :Error->EitherType<String,Buffer>->Void) :Void {
+				var t = function(chunk :String, encoding :String, cb :Error->EitherType<Buffer,String>->Void) :Void {
 					if (stdoutStream != null) {
 						stdoutStream.write(chunk);
 					}
@@ -996,6 +1001,7 @@ class ClientCommands
 							imageUrl = decoded.image;
 						}
 					}
+					cb(null, chunk);
 				}
 				var transform = StreamTools.createTransformStream(t);
 				response.pipe(transform);

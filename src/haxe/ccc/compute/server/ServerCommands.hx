@@ -44,7 +44,8 @@ class ServerCommands
 				return DockerTools.__buildDockerImage(docker, repositoryTag, imageStream, resultStream);
 			})
 			.pipe(function(_) {
-				return pushImageIntoRegistryInternal(repositoryTag, resultStream);
+				trace('built docker image, pushing');
+				return pushImageIntoRegistryInternal(repositoryTag, null, resultStream);
 			});
 	}
 
@@ -125,33 +126,31 @@ class ServerCommands
 	 */
 	public static function pushImageIntoRegistryInternal(image :String, ?tag :String, ?resultStream :IWritable) :Promise<DockerUrl>
 	{
-		var log = Logger.child({f:'pushImageIntoRegistry', image:image, tag:tag});
 		var docker = ConnectionToolsDocker.getDocker();
 		var remoteImageUrl :DockerUrl = image;
 		if (remoteImageUrl.tag == null) {
 			remoteImageUrl.tag = 'latest';
 		}
-		trace('remoteImageUrl=${remoteImageUrl}');
 		var localImageUrl :DockerUrl = remoteImageUrl;
-		trace('localImageUrl=${localImageUrl}');
 		if (tag != null) {
 			localImageUrl.tag = tag;
 		}
-		trace('localImageUrl=${localImageUrl}');
 		var registryAddress :Host = ConnectionToolsDocker.getLocalRegistryHost();
+		var log = Logger.child({f:'pushImageIntoRegistry', image:image, tag:tag, resultStream:(resultStream != null), registryAddress:registryAddress, localImageUrl:localImageUrl, remoteImageUrl:remoteImageUrl});
+		log.debug({step:'start'});
 
 		return Promise.promise(true)
 			//Tag image
 			.pipe(function(_) {
 				//Then tag it
 				var dockerImage = docker.getImage(image);
-				trace('fffff');
-				trace('localImageUrl=${localImageUrl}');
-				trace('Host.fromString("localhost:$REGISTRY_DEFAULT_PORT")=${Host.fromString('localhost:$REGISTRY_DEFAULT_PORT')}');
+				// trace('fffff');
+				// trace('localImageUrl=${localImageUrl}');
+				// trace('Host.fromString("localhost:$REGISTRY_DEFAULT_PORT")=${Host.fromString('localhost:$REGISTRY_DEFAULT_PORT')}');
 				localImageUrl.registryhost = Host.fromString('localhost:$REGISTRY_DEFAULT_PORT');
-				trace('localImageUrl=${localImageUrl}');
+				// trace('localImageUrl=${localImageUrl}');
 				var newImageName = localImageUrl.noTag();
-				trace('newImageName=${newImageName}');
+				// trace('newImageName=${newImageName}');
 				var promise = new CallbackPromise();
 				log.debug({step:'pulled_success_tagging', repo:newImageName, tag:localImageUrl.tag});
 				dockerImage.tag({repo:newImageName, tag:localImageUrl.tag}, promise.cb2);
