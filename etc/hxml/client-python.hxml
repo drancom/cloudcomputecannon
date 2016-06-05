@@ -5,7 +5,6 @@ etc/hxml/base.hxml
 -lib yaml
 -lib json-rpc
 
--cp common/src
 -cp src/haxe
 -cp ../lib/haxe-json-rpc/src
 

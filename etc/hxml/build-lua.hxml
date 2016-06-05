@@ -1,0 +1,7 @@
+etc/hxml/base.hxml
+
+-main ccc.compute.LuaTest
+
+-lua build/lua/luatest.lua
+
+# -cmd echo '#!/usr/bin/env python3' | cat - bin/client.py > temp && mv temp bin/client.py && chmod 755 bin/client.py

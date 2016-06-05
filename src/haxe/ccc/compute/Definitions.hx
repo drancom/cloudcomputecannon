@@ -416,6 +416,7 @@ enum CLIResult {
 	Success;
 }
 
+#if js
 abstract CLIServerPathRoot(String) from String
 {
 	inline public function new(s :String)
@@ -447,13 +448,12 @@ abstract CLIServerPathRoot(String) from String
 		}
 	}
 
-	
-
 	public function toString() :String
 	{
 		return this;
 	}
 }
+#end
 
 typedef ServerCheckResult = {
 	@:optional var ok :Bool;
