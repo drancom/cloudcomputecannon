@@ -19,7 +19,7 @@ class ConnectionToolsRegistry
 			return host;
 		} else {
 			var isInContainer = ConnectionToolsDocker.isInsideContainer();
-			var address = isInContainer ? 'registry' : ConnectionToolsDocker.getDockerHost();
+			var address :String = isInContainer ? 'registry' : ConnectionToolsDocker.getDockerHost();
 			var port = isInContainer ? REGISTRY_DEFAULT_PORT - 1 : REGISTRY_DEFAULT_PORT;
 			return new Host(new HostName(address), new Port(port));
 		}

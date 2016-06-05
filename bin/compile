@@ -1,2 +1,2 @@
 #!/usr/bin/env sh
-docker run --rm -ti -v `pwd`/src:/app/src -v `pwd`/etc:/app/etc -v `pwd`/build:/app/build lua haxe etc/hxml/build-all.hxml
+docker run --rm -ti -v `pwd`/src:/app/src -v `pwd`/test:/app/test lua haxe etc/hxml/build-all.hxml
