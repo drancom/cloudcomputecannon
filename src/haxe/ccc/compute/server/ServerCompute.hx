@@ -239,6 +239,8 @@ class ServerCompute
 				var schedulingService = new ccc.compute.ServiceBatchCompute();
 				injector.map(ServiceBatchCompute).toValue(schedulingService);
 
+				var registryService = new ccc.compute.ServiceRegistry();
+
 				//Monitor workers
 				var workerManager = new WorkerManager();
 				injector.map(WorkerManager).toValue(workerManager);
@@ -249,6 +251,7 @@ class ServerCompute
 				//Inject everything!
 				injector.injectInto(storage);
 				injector.injectInto(schedulingService);
+				injector.injectInto(registryService);
 				injector.injectInto(workerManager);
 				for (workerProvider in workerProviders) {
 					injector.injectInto(workerProvider);
@@ -257,6 +260,7 @@ class ServerCompute
 				//RPC machinery
 				//Server infrastructure. This automatically handles client JSON-RPC remoting and other API requests
 				app.use(SERVER_API_URL, cast schedulingService.router());
+				app.use(SERVER_API_URL, cast registryService.router());
 
 				//Actually create the server and start listening
 				var server = Http.createServer(cast app);
