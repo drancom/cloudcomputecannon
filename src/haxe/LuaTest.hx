@@ -1,11 +1,11 @@
-package ccc.compute;
 
 class LuaTest
 {
 	static function main()
 	{
+
 		// var test = Redis.call("foo");
-		trace('test');
+		// trace('test');
 	}
 }
 

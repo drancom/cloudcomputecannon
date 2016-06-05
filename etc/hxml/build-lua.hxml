@@ -1,6 +1,10 @@
-etc/hxml/base.hxml
+# etc/hxml/base.hxml
 
--main ccc.compute.LuaTest
+-dce full
+
+-cp src/haxe
+
+-main LuaTest
 
 -lua build/lua/luatest.lua
 
