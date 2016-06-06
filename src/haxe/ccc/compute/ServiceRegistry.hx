@@ -5,26 +5,93 @@ import ccc.compute.Definitions.Constants.*;
 import ccc.compute.server.ServerCommands;
 import ccc.storage.ServiceStorage;
 
+import haxe.DynamicAccess;
 import haxe.Json;
 
 import js.node.http.*;
 import js.node.http.ServerResponse;
 import js.npm.RedisClient;
 
+import promhx.Promise;
+
+import t9.abstracts.net.*;
+
 import util.DockerTools;
+import util.DockerRegistryTools;
 import util.streams.StreamTools;
 
+/**
+ * Rest API and other internal tools for uploading and managing
+ * docker images defined by jobs and used by workers.
+ */
 class ServiceRegistry
 {
-	@inject public var _fs :ServiceStorage;
-	@inject public var _redis :RedisClient;
+	// @inject public var _fs :ServiceStorage;
+	// @inject public var _redis :RedisClient;
 
-	public function new() {}
+	@rpc({
+		alias:'image-exists',
+		doc:'Checks if a docker image exists in the registry'
+	})
+	public function imageExistsInLocalRegistry(image :DockerUrl) :Promise<Bool>
+	{
+		var repository = image.repository;
+		var tag = image.tag;
+		var host :Host = ConnectionToolsRegistry.getRegistryAddress();
+		trace('imageExistsInLocalRegistry image=$image repository=$repository tag=$tag host=$host');
+		return DockerRegistryTools.isImageIsRegistry(host, repository, tag);
+	}
+
+	@rpc({
+		alias:'images',
+		doc:'Checks if a docker image exists in the registry'
+	})
+	public function getAllImagesInRegistry() :Promise<DynamicAccess<Array<String>>>
+	{
+		var host :Host = ConnectionToolsRegistry.getRegistryAddress();
+		return DockerRegistryTools.getRegistryImagesAndTags(host);
+	}
+
+	public function getCorrectImageUrl(url :DockerUrl) :Promise<DockerUrl>
+	{
+		return getFullDockerImageRepositoryUrl(url);
+	}
+
+	/**
+	 * If the docker image repository looks like 'myname/myimage', it might
+	 * be an image actually already uploaded to the registry. However, workers
+	 * need the full URL to the registry e.g. "<ip>:5001/myname/myimage".
+	 * This function checks if the image is in the repository, and if so,
+	 * ensures the host is part of the full URL.
+	 * @param  url :DockerUrlBlob [description]
+	 * @return     [description]
+	 */
+	public function getFullDockerImageRepositoryUrl(url :DockerUrl) :Promise<DockerUrl>
+	{
+		trace('getFullDockerImageRepositoryUrl url=$url');
+		if (url.registryhost != null) {
+			return Promise.promise(url);
+		} else {
+			return imageExistsInLocalRegistry(url)
+				.then(function(exists) {
+					if (!exists) {
+						trace('getFullDockerImageRepositoryUrl url=$url exists=$exists');
+						return url;
+					} else {
+						var registryHost :Host = ConnectionToolsRegistry.getRegistryAddress();
+						url.registryhost = registryHost;
+						trace('getFullDockerImageRepositoryUrl url=$url exists=$exists');
+						return url;
+					}
+				});
+		}
+	}
 
 	public function router() :js.node.express.Router
 	{
 		var router = js.node.express.Express.GetRouter();
 		router.post('/build/*', buildDockerImageRouter);
+		router.get('/exists/*', buildDockerImageRouter);
 		return router;
 	}
 
@@ -89,4 +156,6 @@ class ServiceRegistry
 				returnError('Failed to build image err=$err', 500);
 			});
 	}
+
+	public function new() {}
 }

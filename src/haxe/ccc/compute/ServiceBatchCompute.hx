@@ -270,11 +270,11 @@ class ServiceBatchCompute
 		//Handle the special multi-part requests. These are a special case.
 		router.post(SERVER_API_RPC_URL_FRAGMENT, multiFormJobSubmissionRouter());
 
-		var serverContext = new t9.remoting.jsonrpc.Context();
-		serverContext.registerService(this);
-		serverContext.registerService(ccc.compute.server.ServerCommands);
-		router.post(SERVER_API_RPC_URL_FRAGMENT, Routes.generatePostRequestHandler(serverContext));
-		router.get(SERVER_API_RPC_URL_FRAGMENT, Routes.generateGetRequestHandler(serverContext, Constants.SERVER_RPC_URL));
+		// var serverContext = new t9.remoting.jsonrpc.Context();
+		// serverContext.registerService(this);
+		// serverContext.registerService(ccc.compute.server.ServerCommands);
+		// router.post(SERVER_API_RPC_URL_FRAGMENT, Routes.generatePostRequestHandler(serverContext));
+		// router.get(SERVER_API_RPC_URL_FRAGMENT, Routes.generateGetRequestHandler(serverContext, Constants.SERVER_RPC_URL));
 
 		// router.post('/build/*', buildDockerImageRouter);
 		return router;

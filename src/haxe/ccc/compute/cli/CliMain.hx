@@ -119,7 +119,7 @@ class CliMain
 		//Add the client methods. These are handled the same as the remote JsonRpc
 		//methods, except that they are local, so the command JsonRpc is just sent
 		//to the local context.
-		var clientRpcDefinitions = t9.remoting.jsonrpc.Macros.getMethodDefinitions(ccc.compute.cli.ClientCommands);
+		var clientRpcDefinitions = [];//t9.remoting.jsonrpc.Macros.getMethodDefinitions(ccc.compute.cli.ClientCommands);
 
 		var rpcDefinitionMap = new Map<String, {isClient:Bool, def:RemoteMethodDefinition}>();
 		var rpcAlias :Array<String> = [];
@@ -129,7 +129,8 @@ class CliMain
 		}
 
 		//Server methods
-		var serverMethodDefinitions = t9.remoting.jsonrpc.Macros.getMethodDefinitions(ccc.compute.server.ServerCommands, ccc.compute.ServiceBatchCompute);
+		var serverMethodDefinitions = t9.remoting.jsonrpc.Macros.getMethodDefinitions(ccc.compute.ServiceRegistry);
+		// var serverMethodDefinitions = t9.remoting.jsonrpc.Macros.getMethodDefinitions(ccc.compute.server.ServerCommands, ccc.compute.ServiceBatchCompute, ccc.compute.ServiceRegistry);
 		for (def in serverMethodDefinitions) {
 			rpcDefinitionMap.set(def.alias, {isClient:false, def:def});
 			rpcAlias.push(def.alias);

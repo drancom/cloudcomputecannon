@@ -3,6 +3,7 @@ package ccc.compute.server;
 import ccc.storage.StorageSourceType;
 import haxe.Json;
 import haxe.remoting.JsonRpc;
+import t9.js.jsonrpc.Routes;
 
 import js.Node;
 import js.node.Fs;
@@ -162,9 +163,11 @@ class ServerCompute
 			try {
 				customVersion = Fs.readFileSync(Path.join(ROOT, 'VERSION'), {encoding:'utf8'});
 			} catch(ignored :Dynamic) {
-				customVersion = 'Missing VERSION file';
+				try {
+					customVersion = Json.parse(Fs.readFileSync('package.json', {encoding:'utf8'})).version;
+				} catch(ignored :Dynamic) {}
 			}
-			res.send(Json.stringify({compiler:haxeCompilerVersion, file:customVersion, status:status}));
+			res.send(Json.stringify({compiler:haxeCompilerVersion, version:customVersion, status:status}));
 		});
 		//Check if server is listening
 		app.get(Constants.SERVER_PATH_CHECKS, function(req, res) {
@@ -228,7 +231,10 @@ class ServerCompute
 				status = ServerStatus.BuildingServices_3_4;
 				Log.debug({server_status:status});
 				//Build and inject the app logic
-				//Create services
+
+				////////////////////////////////////////////////////////////////
+				//Create services, and inject everything
+				////////////////////////////////////////////////////////////////
 				var storage :ServiceStorage = StorageTools.getStorage(storageConfig);
 				Assert.notNull(storage);
 				injector.map(ServiceStorage).toValue(storage);
@@ -240,15 +246,16 @@ class ServerCompute
 				injector.map(ServiceBatchCompute).toValue(schedulingService);
 
 				var registryService = new ccc.compute.ServiceRegistry();
+				injector.map(ccc.compute.ServiceRegistry).toValue(registryService);
 
 				//Monitor workers
 				var workerManager = new WorkerManager();
 				injector.map(WorkerManager).toValue(workerManager);
 				//This actually executes the jobs
 				var jobManager = new Jobs();
-				injector.injectInto(jobManager);
 
 				//Inject everything!
+				injector.injectInto(jobManager);
 				injector.injectInto(storage);
 				injector.injectInto(schedulingService);
 				injector.injectInto(registryService);
@@ -257,12 +264,26 @@ class ServerCompute
 					injector.injectInto(workerProvider);
 				}
 
-				//RPC machinery
-				//Server infrastructure. This automatically handles client JSON-RPC remoting and other API requests
-				app.use(SERVER_API_URL, cast schedulingService.router());
-				app.use(SERVER_API_URL, cast registryService.router());
 
+				////////////////////////////////////////////////////////////////
+				//RPC machinery
+				////////////////////////////////////////////////////////////////
+				//Server infrastructure. This automatically handles client JSON-RPC remoting and other API requests
+				// app.use(SERVER_API_URL, cast schedulingService.router());
+				// app.use(SERVER_API_URL, cast registryService.router());
+				//JSON-RPC system
+				var serverContext = new t9.remoting.jsonrpc.Context();
+				//JSON-RPC system: register all services
+				// serverContext.registerService(schedulingService);
+				serverContext.registerService(registryService);
+				//JSON-RPC system: set up get+post routes
+				app.post(SERVER_RPC_URL, Routes.generatePostRequestHandler(serverContext));
+				app.get(SERVER_RPC_URL, Routes.generateGetRequestHandler(serverContext, Constants.SERVER_RPC_URL));
+
+
+				////////////////////////////////////////////////////////////////
 				//Actually create the server and start listening
+				////////////////////////////////////////////////////////////////
 				var server = Http.createServer(cast app);
 
 				//Websocket server for getting job finished notifications
