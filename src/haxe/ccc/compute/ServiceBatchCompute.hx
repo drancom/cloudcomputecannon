@@ -3,11 +3,20 @@ package ccc.compute;
 import ccc.compute.Definitions;
 import ccc.compute.Definitions.Constants.*;
 
+import haxe.Json;
+import haxe.remoting.JsonRpc;
+
 import promhx.Promise;
+import promhx.deferred.DeferredPromise;
+
+import util.DockerUrl;
+
+using Lambda;
+using StringTools;
+using promhx.PromiseTools;
+using DateTools;
 
 #if (nodejs && !macro)
-	import haxe.Json;
-	import haxe.remoting.JsonRpc;
 	import t9.js.jsonrpc.Routes;
 
 	import js.Node;
@@ -21,12 +30,6 @@ import promhx.Promise;
 	import js.npm.RedisClient;
 	import js.npm.Streamifier;
 
-	import promhx.deferred.DeferredPromise;
-	import promhx.RedisPromises;
-	import promhx.StreamPromises;
-	import promhx.PromiseTools;
-	import promhx.DockerPromises;
-
 	import ccc.compute.server.ServerCommands;
 	import ccc.compute.server.ServerCommands.*;
 	import ccc.compute.workers.WorkerProvider;
@@ -36,19 +39,22 @@ import promhx.Promise;
 	import ccc.storage.StorageSourceType;
 	import ccc.storage.StorageTools;
 
+	import promhx.RedisPromises;
+	import promhx.StreamPromises;
+	import promhx.PromiseTools;
+	import promhx.DockerPromises;
+
 	import util.DockerTools;
 
-	using Lambda;
-	using StringTools;
 	using ccc.compute.ComputeTools;
 	using ccc.compute.ComputeQueue;
 	using ccc.compute.JobTools;
 	using promhx.PromiseTools;
-	using DateTools;
 #else
 	typedef Express=Dynamic;
 	typedef IncomingMessage=Dynamic;
 	typedef ServerResponse=Dynamic;
+	typedef PullImageOptions=Dynamic;
 #end
 
 /**
@@ -79,7 +85,11 @@ class ServiceBatchCompute
 	})
 	public function pullRemoteImageIntoRegistry(image :String, ?tag :String, ?opts: PullImageOptions) :Promise<DockerUrl>
 	{
+#if nodejs
 		return ServerCommands.pushImageIntoRegistry(image, tag, opts);
+#else
+		return Promise.promise(null);
+#end
 	}
 
 	@rpc({
@@ -119,8 +129,11 @@ class ServiceBatchCompute
 			inputsPath: inputsPath,
 			outputsPath: outputsPath,
 		}
-
+#if nodejs
 		return runComputeJobRequest(request);
+#else
+		return Promise.promise(null);
+#end
 	}
 
 	@rpc({
@@ -129,7 +142,11 @@ class ServiceBatchCompute
 	})
 	public function jobs() :Promise<Array<JobId>>
 	{
+#if nodejs
 		return ComputeQueue.getAllJobIds(_redis);
+#else
+		return Promise.promise([]);
+#end
 	}
 
 	@rpc({
@@ -144,6 +161,7 @@ class ServiceBatchCompute
 	})
 	public function doJobCommand(command :JobCLICommand, jobId :Array<JobId>, ?json :Bool = true) :Promise<TypedDynamicObject<JobId,Dynamic>>
 	{
+#if nodejs
 		if (jobId == null || jobId.length == 0 || (jobId.length == 1 && jobId[0] == null)) {
 			return ComputeQueue.getAllJobIds(_redis)
 				.pipe(function(jobId) {
@@ -172,6 +190,9 @@ class ServiceBatchCompute
 					return results;
 				});
 		}
+#else
+		return Promise.promise(null);
+#end
 	}
 
 	function __doJobCommandInternal(command :JobCLICommand, jobId :Array<JobId>, ?json :Bool = false) :Promise<TypedDynamicObject<JobId,Dynamic>>

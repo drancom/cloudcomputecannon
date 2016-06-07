@@ -11,6 +11,6 @@ etc/hxml/base.hxml
 
 -main ccc.compute.client.ClientHelperPython
 
--python bin/client.py
+-python build/client/client.py
 
--cmd echo '#!/usr/bin/env python3' | cat - bin/client.py > temp && mv temp bin/client.py && chmod 755 bin/client.py
+-cmd echo '#!/usr/bin/env python3' | cat - build/client/client.py > temp && mv temp build/client/client.py && chmod 755 build/client/client.py

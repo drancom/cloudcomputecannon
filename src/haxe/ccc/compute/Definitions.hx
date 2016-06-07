@@ -9,6 +9,10 @@ package ccc.compute;
 	import ccc.storage.StorageTools;
 #end
 
+import haxe.io.Path;
+
+import sys.FileSystem;
+
 import t9.abstracts.time.Minutes;
 import t9.abstracts.net.*;
 
@@ -409,31 +413,24 @@ abstract CLIServerPathRoot(String) from String
 
 	inline public function getServerJsonConfigPath() :String
 	{
-		return js.node.Path.join(this, Constants.LOCAL_CONFIG_DIR, Constants.SERVER_CONNECTION_FILE);
+		return Path.join([this, Constants.LOCAL_CONFIG_DIR, Constants.SERVER_CONNECTION_FILE]);
 	}
 
 	inline public function getServerJsonConfigPathDir() :String
 	{
-		return js.node.Path.join(this, Constants.LOCAL_CONFIG_DIR);
+		return Path.join([this, Constants.LOCAL_CONFIG_DIR]);
 	}
 
 	inline public function getLocalServerPath() :String
 	{
-		return js.node.Path.join(this, Constants.SERVER_LOCAL_DOCKER_DIR);
+		return Path.join([this, Constants.SERVER_LOCAL_DOCKER_DIR]);
 	}
 
 	inline public function localServerPathExists() :Bool
 	{
 		var p = getLocalServerPath();
-		try {
-			var stats = js.node.Fs.statSync(p);
-			return true;
-		} catch (err :Dynamic) {
-			return false;
-		}
+		return FileSystem.exists(p);
 	}
-
-	
 
 	public function toString() :String
 	{

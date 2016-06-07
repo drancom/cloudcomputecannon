@@ -9,9 +9,13 @@ class PromiseTools
 	public static function error<A>(err :Dynamic) :Promise<A>
 	{
 		var p = new Promise();
+#if nodejs
 		js.Node.setTimeout(function() {
 			p.reject(err);
 		}, 1);
+#else
+		throw 'Not implemented';
+#end
 		return p;
 	}
 

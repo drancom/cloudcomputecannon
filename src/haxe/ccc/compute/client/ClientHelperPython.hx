@@ -4,7 +4,8 @@ import haxe.Json;
 import haxe.remoting.JsonRpc;
 
 import ccc.compute.Definitions;
-import ccc.compute.client.externs.python.PythonRequests;
+import ccc.compute.Definitions.Constants.*;
+// import ccc.compute.client.externs.python.PythonRequests;
 
 import python.*;
 import python.lib.Builtins;
@@ -12,7 +13,7 @@ import python.lib.os.Path;
 
 import sys.FileSystem;
 
-import util.net.Host;
+import t9.abstracts.net.*;
 
 using ccc.compute.client.PyHelpers;
 
@@ -75,7 +76,7 @@ class ClientHelperPython
 			var requestInputs :Array<Dynamic> = jobRequest.inputs;
 			for (k in inputs.keys()) {
 				var inputSource :ComputeInputSource = {
-					type: InputSource.Inline,
+					type: InputSource.InputInline,
 					value: inputs.get(k),
 					name: k,
 					encoding: 'utf8'
@@ -103,7 +104,7 @@ class ClientHelperPython
 
 		var response = if (inputFiles != null || inputFolder != null) {
 			var fileDict = new Dict<String,Dynamic>();
-			fileDict.set(Constants.MULTIPART_JSONRPC_KEY, new Tuple<Dynamic>([Constants.MULTIPART_JSONRPC_KEY, jsonRpcString]));
+			fileDict.set(JsonRpcConstants.MULTIPART_JSONRPC_KEY, new Tuple<Dynamic>([JsonRpcConstants.MULTIPART_JSONRPC_KEY, jsonRpcString]));
 			if (inputFiles != null) {
 				for (fileName in inputFiles) {
 					var baseName = Path.basename(fileName);
@@ -120,18 +121,21 @@ class ClientHelperPython
 					throw 'Not a directory inputFolder=$inputFolder';
 				}
 			}
-			PythonRequests.post.call(url, files=>fileDict);
+			// PythonRequests.post.call(url, files=>fileDict);
+			{};
 		} else {
 			var headers :KwArgs<Dynamic> = {'Content-Type': 'application/json-rpc'};
-			PythonRequests.post.call(url, headers=>headers, data=>jsonRpcString);
+			// PythonRequests.post.call(url, headers=>headers, data=>jsonRpcString);
+			{};
 		}
-		var response = python.lib.Json.loads(response.text);
+		// var response = python.lib.Json.loads(response.text);
 
-		if (response.hasKey('error') && response.get('error') != null) {
-			throw response.get('error');
-		} else {
-			return response.get('result').get('jobId');
-		}
+		// if (response.hasKey('error') && response.get('error') != null) {
+		// 	throw response.get('error');
+		// } else {
+		// 	return response.get('result').get('jobId');
+		// }
+		return 'fakejobid_fixme';
 	}
 
 	public static function stdout(host :String, jobId :JobId) :String
