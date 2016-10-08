@@ -10,8 +10,8 @@ import promhx.PromiseTools;
 import promhx.RedisPromises;
 
 import ccc.compute.client.ClientCompute;
+import ccc.compute.client.ClientTools;
 import ccc.compute.ServiceBatchCompute;
-import ccc.compute.Definitions;
 import ccc.compute.ConnectionToolsRedis;
 
 import utils.TestTools;
@@ -63,13 +63,12 @@ class TestRestartAfterCrashBase extends TestBase
 			//Submit a job
 			.pipe(function(_) {
 				var jobParams :BasicBatchProcessRequest = {
-					image:'busybox',
+					image:DOCKER_IMAGE_DEFAULT,
 					cmd: ['sleep', '2'],
 					parameters: {cpus:1, maxDuration:60*1000*10}
 				};
-
 				//Get the job id
-				return ClientCompute.postJob(hostport, jobParams)
+				return ClientTools.postJob(hostport, jobParams)
 					.then(function(result) {
 						jobId = result.jobId;
 						return true;

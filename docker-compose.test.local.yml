@@ -1,0 +1,29 @@
+version: '2'
+
+services:
+  compute:
+    command: ["haxe", "test/testsIntegration.hxml"]
+    environment:
+      AWS: "false"
+      DOCKER: "true"
+      VAGRANT: "false"
+
+  redis:
+    logging:
+      driver: "none"
+      options: {}
+
+  registry:
+    logging:
+      driver: "none"
+      options: {}
+
+  elasticsearch:
+    logging:
+      driver: "none"
+      options: {}
+
+  kibana:
+    logging:
+      driver: "none"
+      options: {}

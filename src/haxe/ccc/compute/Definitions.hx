@@ -1,18 +1,19 @@
 package ccc.compute;
 
+import haxe.DynamicAccess;
+
+import util.ObjectTools;
+
+import ccc.storage.StorageDefinition;
+
 #if (nodejs && !macro)
-	import js.npm.Docker;
-	import js.npm.Ssh;
+	import js.npm.docker.Docker;
+	import js.npm.ssh2.Ssh;
 	import js.npm.PkgCloud.ProviderCredentials;
 
 	import ccc.storage.ServiceStorage;
 	import ccc.storage.StorageTools;
 #end
-
-import t9.abstracts.time.Minutes;
-import t9.abstracts.net.*;
-
-using StringTools;
 
 /**
  *********************************************
@@ -71,17 +72,31 @@ abstract InputSource(String) {
 	var InputStream = 'stream';
 }
 
+//https://nodejs.org/api/buffer.html
+@:enum
+abstract InputEncoding(String) to String from String {
+	//Default
+	var utf8 = 'utf8';
+	var base64 = 'base64';
+	var ascii = 'ascii';
+	var utf16le = 'utf16le';
+	var ucs2 = 'ucs2';
+	var binary = 'binary';
+	var hex = 'hex';
+}
+
 typedef ComputeInputSource = {
-	var type :InputSource;
-	var value :Dynamic;
+	var value :String;
 	var name :String;
-	@:optional var encoding :String;
+	@:optional var type :InputSource; //Default: InputInline
+	@:optional var encoding :InputEncoding;
 }
 
 //TODO: this should extend (or somehow use the Definitions.DockerBatchComputeJob)
 typedef BasicBatchProcessRequest = {
 	@:optional var inputs :Array<ComputeInputSource>;
 	@:optional var image :String;
+	@:optional var pull_options :PullImageOptions;
 	@:optional var cmd :Array<String>;
 	@:optional var workingDir :String;
 	@:optional var parameters :JobParams;
@@ -91,6 +106,10 @@ typedef BasicBatchProcessRequest = {
 	@:optional var inputsPath :String;
 	@:optional var outputsPath :String;
 	@:optional var contextPath :String;
+	/* Returns the result.json when the job is finished */
+	@:optional var wait :Bool;
+	/* Metadata logged and saved in the job definition and results.json  */
+	@:optional var meta :Dynamic;
 }
 
 
@@ -108,6 +127,7 @@ abstract DockerImageSourceType(String) {
 
 typedef DockerImageSource = {
 	var type :DockerImageSourceType;
+	@:optional var pull_options :PullImageOptions;
 	@:optional var value :String;//If an image, image name, if a context, the URL of the path
 #if (nodejs && !macro)
 	@:optional var options :BuildImageOptions;
@@ -150,20 +170,13 @@ typedef DockerJobDefinition = {>DockerBatchComputeJob,
 
 /********************************************/
 
-typedef ProviderConfigBase = {
-	var maxWorkers :Int;
-	var minWorkers :Int;
-	var priority :Int;
-	var billingIncrement :Minutes;
-}
-
 typedef InstanceDefinition = {
 	var id :MachineId;
 	var hostPublic :HostName;
 	var hostPrivate :HostName;
-#if nodejs
+#if (nodejs && !macro)
 	var ssh :ConnectOptions;
-	var docker :ConstructorOpts;
+	var docker :DockerConnectionOpts;
 #else
 	var ssh :Dynamic;
 	var docker :Dynamic;
@@ -194,16 +207,10 @@ abstract MachinePoolId(String) to String
 	{
 		this = s;
 	}
-
-	@:from
-	inline static public function fromString (s: String)
-	{
-		return new MachinePoolId(s);
-	}
 }
 
 @:enum
-abstract JobStatus(String) from String {
+abstract JobStatus(String) to String from String {
 	/**
 	 * The job is in the queue.
 	 * Set in Redis, not handled elsewhere.
@@ -243,6 +250,14 @@ abstract JobWorkingStatus(String) from String to String {
 	var FinishedWorking = 'finished_working';
 }
 
+/**
+ * Used to bundle together the entire status
+ */
+typedef JobStatusBlob = {
+	var status :JobStatus;
+	var statusWorking :JobWorkingStatus;
+}
+
 typedef BatchJobResult = {
 	var exitCode :Int;
 	var copiedLogs :Bool;
@@ -252,7 +267,7 @@ typedef BatchJobResult = {
 }
 
 @:enum
-abstract JobFinishedStatus(String) from String {
+abstract JobFinishedStatus(String) from String to String {
 	/**
 	 * Success simply means the docker container ran, then eventually exited.
 	 * The container can exit with a non-zero exit code, this is still
@@ -282,6 +297,7 @@ abstract JobFinishedStatus(String) from String {
 
 typedef JobStatusUpdate = {
 	var JobStatus :JobStatus;
+	var JobWorkingStatus :JobWorkingStatus;
 	var JobFinishedStatus :JobFinishedStatus;
 	var jobId :JobId;
 	@:optional var computeJobId :ComputeJobId;
@@ -293,7 +309,7 @@ typedef JobStatusUpdate = {
 /**
  * Example:
  * {
-	id : 3519F65B-10EA-46F3-92F8-368CF377DFCF,
+	jobId : asd74gf,
 	status : Success,
 	exitCode : 0,
 	stdout : https://s3-us-west-1.amazonaws.com/bionano-platform-test/3519F65B-10EA-46F3-92F8-368CF377DFCF/stdout,
@@ -306,12 +322,12 @@ typedef JobStatusUpdate = {
 }
  */
 typedef JobResult = {
-	var id :JobId;
-	var status :JobFinishedStatus;
-	var exitCode :Int;
-	var stdout :String;
-	var stderr :String;
-	var resultJson :String;
+	var jobId :JobId;
+	@:optional var status :JobFinishedStatus;
+	@:optional var exitCode :Int;
+	@:optional var stdout :String;
+	@:optional var stderr :String;
+	@:optional var resultJson :String;
 	@:optional var inputsBaseUrl :String;
 	@:optional var inputs :Array<String>;
 	@:optional var outputsBaseUrl :String;
@@ -319,6 +335,13 @@ typedef JobResult = {
 	@:optional var error :Dynamic;
 }
 
+typedef SystemStatus = {
+	var pendingTop5 :Array<JobId>;
+	var pendingCount :Int;
+	var workers :Array<{id :MachineId, jobs:Array<{id:JobId,enqueued:String,started:String,duration:String}>,cpus:String}>;
+	var finishedTop5 :TypedDynamicObject<JobFinishedStatus,Array<JobId>>;
+	var finishedCount :Int;
+}
 
 /**
  *********************************************
@@ -379,13 +402,29 @@ typedef BasicBatchProcessResponseFull = {>BasicBatchProcessResponse,
 
 typedef ServerConnectionBlob = {
 	var host :Host;
-	var server :InstanceDefinition;
-	var provider: ServiceConfiguration;
+	/**
+	 * If server is missing, the server ssh config is pulled from ~/.ssh/config
+	 */
+	@:optional var server :InstanceDefinition;
+	@:optional var provider: ServiceConfiguration;
+}
+
+typedef ServerVersionBlob = {
+	var npm :String;
+	var compiler :String;
+	var instance :String;
+	@:optional var VERSION :String;
+}
+
+typedef ClientVersionBlob = {
+	var npm :String;
+	var compiler :String;
 }
 
 @:enum
 abstract JobCLICommand(String) from String {
 	var Remove = 'remove';
+	var RemoveComplete = 'removeComplete';
 	var Status = 'status';
 	var ExitCode = 'exitcode';
 	var Kill = 'kill';
@@ -407,12 +446,14 @@ abstract CLIServerPathRoot(String) from String
 	inline public function new(s :String)
 		this = s;
 
-	inline public function getServerJsonConfigPath() :String
+#if (js && !macro)
+
+	inline public function getServerYamlConfigPath() :String
 	{
 		return js.node.Path.join(this, Constants.LOCAL_CONFIG_DIR, Constants.SERVER_CONNECTION_FILE);
 	}
 
-	inline public function getServerJsonConfigPathDir() :String
+	inline public function getServerYamlConfigPathDir() :String
 	{
 		return js.node.Path.join(this, Constants.LOCAL_CONFIG_DIR);
 	}
@@ -433,7 +474,7 @@ abstract CLIServerPathRoot(String) from String
 		}
 	}
 
-	
+#end
 
 	public function toString() :String
 	{
@@ -452,7 +493,7 @@ typedef ServerCheckResult = {
 }
 
 typedef ServiceConfiguration = {
-	@:optional var server: ServiceConfigurationServer;
+	@:optional var storage: StorageDefinition;
 	@:optional var providers: Array<ServiceConfigurationWorkerProvider>;
 }
 
@@ -462,139 +503,134 @@ typedef ENV = {
 	@:optional var REDIS_HOST: String;
 }
 
-typedef ServiceConfigurationServer = {
-	@:optional var storage: ServiceConfigurationStorage;
-}
-
-typedef ServiceConfigurationStorage = {
-	var type: String;
-	@:optional var rootPath: String;
-	@:optional var defaultContainer :String;
-	@:optional var credentials :#if nodejs ProviderCredentials #else Dynamic #end;
-	@:optional var httpAccessUrl :String;
-}
-
 /* This is only used when creating worker providers in code */
 @:enum
-abstract ServiceWorkerProviderType(String) {
-  var boot2docker = "Boot2Docker";
-  var vagrant = "Vagrant";
-  var pkgcloud = "PkgCloud";
-  var mock = "Mock";
+abstract ServiceWorkerProviderType(MachinePoolId) from MachinePoolId to MachinePoolId {
+  var boot2docker = new MachinePoolId("Boot2Docker");
+  var vagrant = new MachinePoolId("Vagrant");
+  var pkgcloud = new MachinePoolId("PkgCloud");
+  var mock = new MachinePoolId("Mock");
+  var test1 = new MachinePoolId("test1");
+  var test2 = new MachinePoolId("test2");
 }
 
-typedef ServiceConfigurationWorkerProvider = {>ProviderConfigBase,
-	var type: ServiceWorkerProviderType;
+typedef ProviderInstanceDefinition = {
+	/* Workers typically are not exposed to the internet, while servers are */
+	@:optional var public_ip :Bool;
+	/* Not all platforms support tagging */
+	@:optional var tags :DynamicAccess<String>;
+	/* These are specific to the provider e.g. AWS */
+	@:optional var options :Dynamic;
+	/* SSH key for this machine. May be defined in parent (shared with other definitions) */
+	@:optional var key :String;
 }
 
-/**
- *********************************************
- * General DEFINITIONS
- **********************************************
- */
+@:enum
+abstract MachineType(String) from String to String {
+  var server = "server";
+  var worker = "worker";
+}
 
-class Constants
+@:forward
+abstract CloudProvider(ServiceConfigurationWorkerProvider) from ServiceConfigurationWorkerProvider to ServiceConfigurationWorkerProvider
 {
-	/* Networking */
-	public static var SERVER_HOSTNAME_PRIVATE :String;
-	public static var SERVER_HOSTNAME_PUBLIC :String;
+	inline function new (val: ServiceConfigurationWorkerProvider)
+		this = val;
 
-	/* General */
-	inline public static var BUILD_DIR = 'build';
-	inline public static var APP_NAME = 'cloud-compute-cannon';
-	public static var APP_SERVER_FILE = APP_NAME + '-server.js';
-	public static var APP_NAME_COMPACT = APP_NAME.replace('-', '');
-	public static var CLI_COMMAND = APP_NAME_COMPACT;
-
-	/* Redis */
-	inline public static var SEP = '::';
-	inline public static var JOB_ID_ATTEMPT_SEP = '_';
-
-	/* Job constants */
-	public static inline var RESULTS_JSON_FILE = 'result.json';
-	public static inline var DIRECTORY_INPUTS = 'inputs';
-	public static inline var DIRECTORY_OUTPUTS = 'outputs';
-	public static inline var DIRECTORY_NAME_WORKER_OUTPUT = 'computejobs';
-	/** If you change this, change etc/log/plugins/output_worker_log.rb */
-	inline public static var JOB_DATA_DIRECTORY_WITHIN_CONTAINER = '/$DIRECTORY_NAME_WORKER_OUTPUT/';
-	// public static var DIRECTORY_WORKER_BASE = '/tmp/$DIRECTORY_NAME_WORKER_OUTPUT/';
-	public static var JOB_DATA_DIRECTORY_HOST_MOUNT = '/$DIRECTORY_NAME_WORKER_OUTPUT/';
-	// public static var SERVER_DATA_ROOT = '/$DIRECTORY_NAME_WORKER_OUTPUT/';
-	public static inline var STDOUT_FILE = 'stdout';
-	public static inline var STDERR_FILE = 'stderr';
-
-	/* Env vars */
-	inline public static var ENV_VAR_ADDRESS_REGISTRY = 'REGISTRY_ADDRESS';
-	inline public static var ENV_VAR_AWS_PROVIDER_CONFIG = 'AWS_PROVIDER_CONFIG';
-	inline public static var ENV_VAR_COMPUTE_CONFIG = 'COMPUTE_CONFIG';
-
-	/* Server */
-	inline public static var SERVER_DEFAULT_PROTOCOL = 'http';
-	inline public static var SERVER_DEFAULT_PORT = 9000;
-	inline public static var REGISTRY_DEFAULT_PORT = 5001;
-	inline public static var REDIS_PORT = 6379;
-	inline public static var SERVER_PATH_CHECKS = '/checks';
-	inline public static var SERVER_PATH_CHECKS_OK = 'OK';
-	inline public static var SERVER_PATH_STATUS = '/status';
-	inline public static var SERVER_PATH_READY = '/ready';
-	inline public static var SERVER_API_URL = '/api';
-	inline public static var SERVER_API_RPC_URL_FRAGMENT = '/rpc';
-	inline public static var SERVER_RPC_URL = '$SERVER_API_URL/rpc';
-	inline public static var SERVER_URL_API_DOCKER_IMAGE_BUILD = '$SERVER_API_URL/build';
-	inline public static var ADDRESS_REGISTRY_DEFAULT = 'localhost:$REGISTRY_DEFAULT_PORT';
-	inline public static var DOCKER_IMAGE_DEFAULT = 'busybox';
-	inline public static var SERVER_CONTAINER_TAG_SERVER = 'ccc_server';
-	inline public static var SERVER_CONTAINER_TAG_REDIS = 'ccc_redis';
-	inline public static var SERVER_CONTAINER_TAG_REGISTRY = 'ccc_registry';
-	inline public static var SERVER_INSTALL_COMPOSE_SCRIPT = 'etc/server/install_docker_compose.sh';
-	inline public static var SERVER_MOUNTED_CONFIG_FILE = 'serverconfig.json';
-	inline public static var BOOT2DOCKER_PROVIDER_STORAGE_PATH = 'serverconfig.json';
-
-	/* Fluent/logging */
-	inline public static var FLUENTD_API_PORT = 24444;
-	inline public static var FLUENTD_SOURCE_PORT = 24224;
-	inline public static var FLUENTD_HTTP_COLLECTOR_PORT = 9880;
-	inline public static var FLUENTD_API_PATH = '/api/plugins.flushBuffers';
-	inline public static var WORKER_LOGGING_IMAGE_NAME = 'ccc_log_collector';
-	inline public static var WORKER_LOGGING_CONTAINER_NAME = WORKER_LOGGING_IMAGE_NAME;
-	public static var FLUENTD_NODEJS_BUNYAN_TAG_PREFIX = 'docker.nodejs-bunyan';
-	public static var FLUENTD_WORKER_LOG_TAG_PREFIX = 'docker.$APP_NAME_COMPACT.worker';
-	public static var FLUENTD_SERVER_LOG_TAG_PREFIX = '$FLUENTD_NODEJS_BUNYAN_TAG_PREFIX.$APP_NAME_COMPACT.server';
-
-	/* RPC */
-	inline public static var URL_SUBMIT_JOB_MULTIPART = 'submit_job_multipart';
-	inline public static var MULTIPART_FILE_KEY_DOCKER_CONTEXT = 'docker_context';
-
-	/* Misc RPC methods not yet through the JsonRpc system */
-	inline public static var RPC_METHOD_JOB_NOTIFY = 'batchcompute.jobnotify';
-	public static var RPC_METHOD_JOB_SUBMIT = '$APP_NAME_COMPACT.run';
-
-	/* CLI */
-	inline public static var SUBMITTED_JOB_RECORD_FILE = 'job.json';
-	inline public static var RESULT_INVALID_JOB_ID = 'invalid_job_id';
 	/**
-	 * Look for this folder in the working directory all the way down
-	 * to the root dir.
+	 * Some fields are in the parent object as shared defaults, so
+	 * make sure to copy them
+	 * @param  key :String       [description]
+	 * @return     [description]
 	 */
-	public static var LOCAL_CONFIG_DIR = '.$APP_NAME_COMPACT';
-	inline public static var SERVER_CONNECTION_FILE = 'server_connection.json';
-	inline public static var SERVER_CONFIGURATION_FILE = 'server_configuration.yml';
-	public static var SERVER_VAGRANT_DIR = '$LOCAL_CONFIG_DIR/vagrant';
-	public static var SERVER_LOCAL_DOCKER_DIR = '$LOCAL_CONFIG_DIR/local';
+	inline public function getMachineDefinition(machineType :String) :ProviderInstanceDefinition
+	{
+		var instanceDefinition :ProviderInstanceDefinition = this.machines[machineType];
+		if (instanceDefinition == null) {
+			return null;
+		}
+		instanceDefinition = Json.parse(Json.stringify(instanceDefinition));
+		instanceDefinition.public_ip = instanceDefinition.public_ip == true;
+		instanceDefinition.tags = instanceDefinition.tags == null ? {} : instanceDefinition.tags;
+		instanceDefinition.tags = ObjectTools.mergeDeepCopy(
+			instanceDefinition.tags == null ? {} : instanceDefinition.tags,
+			this.tags);
+		instanceDefinition.options = ObjectTools.mergeDeepCopy(
+			instanceDefinition.options == null ? {} : instanceDefinition.options,
+			this.options);
+		return instanceDefinition;
+	}
 
-	/* Workers */
-	inline public static var LOCAL_DOCKER_SSH_CONFIG_PATH = '/usr/local/etc/ssh/sshd_config';
-	inline public static var WORKER_DOCKER_SSH_CONFIG_PATH = '/etc/ssh/sshd_config';
-	inline public static var DOCKER_SSH_CONFIG_SFTP_ADDITION = 'Subsystem sftp internal-sftp';
-	/* We guess how much the OS of CoreOS uses, and subtract this from total memory */
-	inline public static var WORKER_COREOS_OS_MEMORY_USAGE = 2048;//mb
-	inline public static var WORKER_JOB_DEFAULT_MEMORY_REQUIRED = 512;//mb
+	inline public function getShortName() :String
+	{
+		return switch(this.type) {
+			case boot2docker: 'local';
+			case vagrant: 'vagrant';
+			case pkgcloud:
+				var credentials :js.npm.PkgCloud.ClientOptionsAmazon = this.credentials;
+				credentials.provider + '';
+			default: 'unknown';
+		}
+	}
 
-#if nodejs
-	public static var ROOT = (js.Node.process.platform == "win32") ? js.Node.process.cwd().split(js.node.Path.sep)[0] : "/";
-#end
-
-	/* Testing only, IPC */
-	inline public static var IPC_MESSAGE_READY = 'READY';
+	inline public function getMachineKey(machineType :String) :String
+	{
+		var instanceDefinition :ProviderInstanceDefinition = this.machines[machineType];
+		if (instanceDefinition == null) {
+			throw 'Missing definition for machine="$machineType", cannot get key';
+		}
+		if (instanceDefinition.key != null) {
+			return instanceDefinition.key;
+		} else {
+			//Assuming AWS
+			var keyname = instanceDefinition.options.KeyName;
+			if (keyname == null) {
+				keyname = this.options.KeyName;
+			}
+			if (keyname == null) {
+				throw 'No key name defined anywhere.';
+			}
+			return this.keys[keyname];
+		}
+	}
 }
 
+typedef ServiceConfigurationWorkerProvider = {
+	var maxWorkers :Int;
+	var minWorkers :Int;
+	var priority :Int;
+	var billingIncrement :Minutes;
+	/* This is only optional if it has been previously set, and you are adjusting the above values only */
+	@:optional var type: ServiceWorkerProviderType;
+	/* Credentials to pass to third party libraries to access provider API */
+	@:optional var credentials :Dynamic;
+	/* Not all platforms support tagging instances yet. These tags are applied to all instances */
+	@:optional var tags :DynamicAccess<String>;
+	/* These options are common to all instances */
+	@:optional var options :Dynamic;
+	/* SSH keys for connecting to the instances */
+	@:optional var keys :DynamicAccess<String>;
+	@:optional var machines :DynamicAccess<ProviderInstanceDefinition>;
+}
+
+@:forward
+abstract JobResultAbstract(JobResult) from JobResult to JobResult
+{
+	inline function new (val: JobResult)
+		this = val;
+
+	inline public function getOutputUrl(outputName :String) :String
+	{
+		return outputName.startsWith('http') ? outputName : (this.outputsBaseUrl != null && this.outputsBaseUrl.startsWith('http') ? '${this.outputsBaseUrl}${outputName}' : 'http://${SERVER_LOCAL_HOST}/${this.outputsBaseUrl}${outputName}');
+	}
+
+	inline public function getStdoutUrl() :String
+	{
+		return this.stdout.startsWith('http') ? this.stdout : 'http://${SERVER_LOCAL_HOST}/${this.stdout}';
+	}
+
+	inline public function getStderrUrl() :String
+	{
+		return this.stderr.startsWith('http') ? this.stderr : 'http://${SERVER_LOCAL_HOST}/${this.stderr}';
+	}
+}

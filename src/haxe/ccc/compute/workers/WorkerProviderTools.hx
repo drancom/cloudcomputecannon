@@ -9,12 +9,12 @@ import js.Node;
 import js.node.Path;
 import js.node.Fs;
 
-import js.npm.Docker;
-import js.npm.FsExtended;
+import js.npm.docker.Docker;
+import js.npm.fsextended.FsExtended;
 import js.npm.FsPromises;
 import js.npm.RedisClient;
-import js.npm.Ssh;
-import js.npm.Vagrant;
+import js.npm.ssh2.Ssh;
+import js.npm.vagrant.Vagrant;
 
 import promhx.Promise;
 import promhx.deferred.DeferredPromise;
@@ -23,8 +23,6 @@ import promhx.DockerPromises;
 
 import ccc.compute.ComputeTools;
 import ccc.compute.InstancePool;
-import ccc.compute.Definitions;
-import ccc.compute.Definitions.Constants.*;
 import ccc.compute.workers.VagrantTools;
 import ccc.compute.workers.WorkerProviderPkgCloud;
 
@@ -50,12 +48,11 @@ class WorkerProviderTools
 	{
 		return switch(config.type) {
 			case pkgcloud:
-				var pkgcloudConfig :ServiceConfigurationWorkerProviderPkgCloud = cast config;
-				return WorkerProviderPkgCloud.getPublicHostName(pkgcloudConfig);
+				return WorkerProviderPkgCloud.getPublicHostName(config);
 			case boot2docker:
 				return Promise.promise(new HostName('localhost'));
-			case vagrant,mock:
-				throw 'Not yet implemented';
+			default:
+				throw 'WorkerProviderTools.getPublicHostName Not yet implemented';
 		}
 	}
 
@@ -63,12 +60,11 @@ class WorkerProviderTools
 	{
 		return switch(config.type) {
 			case pkgcloud:
-				var pkgcloudConfig :ServiceConfigurationWorkerProviderPkgCloud = cast config;
-				return WorkerProviderPkgCloud.getPrivateHostName(pkgcloudConfig);
+				return WorkerProviderPkgCloud.getPrivateHostName(config);
 			case boot2docker:
 				return Promise.promise(new HostName('localhost'));
-			case vagrant,mock:
-				throw 'Not yet implemented';
+			default:
+				throw 'WorkerProviderTools.getPrivateHostName Not yet implemented';
 		}
 	}
 
@@ -90,7 +86,7 @@ class WorkerProviderTools
 			.thenTrue();
 	}
 
-	public static function getWorkerParameters(opts :ConstructorOpts) :Promise<WorkerParameters>
+	public static function getWorkerParameters(opts :DockerConnectionOpts) :Promise<WorkerParameters>
 	{
 		return DockerPromises.info(new Docker(opts))
 			.then(function(dockerinfo :DockerInfo) {
@@ -102,11 +98,11 @@ class WorkerProviderTools
 			});
 	}
 
-	public static function pollInstanceUntilSshReady(sshOptions :ConnectOptions) :Promise<Bool>
+	public static function pollInstanceUntilSshReady(sshOptions :ConnectOptions, ?attemptCallback :Void->Void) :Promise<Bool>
 	{
 		var retryAttempts = 240;
-		var doublingTimeInterval = 2000;
-		return SshTools.getSsh(sshOptions, retryAttempts, doublingTimeInterval, promhx.RetryPromise.PollType.regular, 'pollInstanceUntilSshReady')
+		var intervalMs = 2000;
+		return SshTools.getSsh(sshOptions, retryAttempts, intervalMs, promhx.RetryPromise.PollType.regular, 'pollInstanceUntilSshReady', false, attemptCallback)
 			.then(function(ssh) {
 				ssh.end();
 				return true;
@@ -150,13 +146,13 @@ class WorkerProviderTools
 							//Start the socket and restart docker
 							'sudo systemctl start docker-tcp.socket',
 							'sudo systemctl start docker',
-							'sudo mkdir -p $JOB_DATA_DIRECTORY_HOST_MOUNT',
-							'sudo chmod 777 $JOB_DATA_DIRECTORY_HOST_MOUNT'
+							'sudo mkdir -p "$WORKER_JOB_DATA_DIRECTORY_HOST_MOUNT"',
+							'sudo chmod 777 "$WORKER_JOB_DATA_DIRECTORY_HOST_MOUNT"'
 						]);
 					})
 					.pipe(function(_) {
 						//Validate by checking the last command
-						return SshTools.execute(sshOptions, 'ls $JOB_DATA_DIRECTORY_HOST_MOUNT', 3, 100)
+						return SshTools.execute(sshOptions, 'ls "$WORKER_JOB_DATA_DIRECTORY_HOST_MOUNT"', 3, 100)
 							.then(function(execResult) {
 								if (execResult.code != 0) {
 									throw 'Failed to set up CoreOS worker';

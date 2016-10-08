@@ -4,8 +4,8 @@ import haxe.Json;
 
 import js.Node;
 import js.npm.RedisClient;
+import js.npm.docker.Docker;
 
-import ccc.compute.Definitions;
 import ccc.compute.InstancePool;
 
 import promhx.Promise;
@@ -13,6 +13,7 @@ import promhx.Promise;
 import promhx.Stream;
 import promhx.deferred.DeferredPromise;
 import promhx.CallbackPromise;
+import promhx.DockerPromises;
 
 import t9.abstracts.net.*;
 import t9.abstracts.time.*;
@@ -36,14 +37,14 @@ typedef MachineRemovalDelayed = {
 class WorkerProviderBase
 	implements WorkerProvider
 {
-	public var id (default, null) :String;
+	public var id (default, null) :ServiceWorkerProviderType;
 	public var redis (get, null) :RedisClient;
 	public var ready (get, null) :Promise<Bool>;
 	public var log :AbstractLogger;
 
 	@inject public var _redis :RedisClient;
 	#if debug public #end
-	var _config :ProviderConfigBase;
+	var _config :ServiceConfigurationWorkerProvider;
 	var _streamMachineCount :Stream<TargetMachineCount>;
 	var _streamMachineStatus :Stream<Array<StatusResult>>;
 	var _ready :Promise<Bool> = Promise.promise(true);
@@ -69,7 +70,7 @@ class WorkerProviderBase
 		log.debug({f:'postInjection'});
 		Assert.that(_streamMachineCount == null, Type.getClassName(Type.getClass(this)) + ' has already been injected');
 		if (id == null) {
-			throw 'Must set id before calling super constructor';
+			throw 'Must set id before calling postInjection';
 		}
 
 		_ready = Promise.promise(true)
@@ -86,12 +87,51 @@ class WorkerProviderBase
 						return true;
 					});
 			})
+			//Check all workers. No retrying allowed, if a worker does not
+			//respond immediately, remove it
+			.pipe(function(_) {
+				log.debug({f:'postInjection', log:'check all existing workers id=$id'});
+				return InstancePool.getInstancesInPool(_redis, id)
+					.pipe(function(workerStatus :Array<StatusResult>) {
+						log.debug('workerStatus=${workerStatus}');
+						var promises = [];
+						for (workerStatus in workerStatus) {
+							switch(workerStatus.status) {
+								case Available,Deferred:
+									log.debug('checking ${workerStatus.id}');
+									promises.push(
+										InstancePool.getWorker(_redis, workerStatus.id)
+											.pipe(function(workerDef) {
+												return DockerPromises.ping(new Docker(workerDef.docker));
+											})
+											.then(function(ok) {
+												//Instance is ok
+												log.debug('${workerStatus.id} docker ping OK');
+												return false;
+											})
+											.errorPipe(function(err) {
+												log.warn('${workerStatus.id} docker ping FAILED');
+												return InstancePool.workerFailed(_redis, workerStatus.id)
+													.errorPipe(function(err) {
+														log.error({message: 'Failed to fail worker that we cannot reach', error:err});
+														return Promise.promise(true);
+													});
+											}));
+								case WaitingForRemoval,Removing,Failed://Ignored
+							}
+						}
+
+
+						return Promise.whenAll(promises)
+							.thenTrue();
+					});
+			})
 			.pipe(function(_) {
 				log.debug({f:'postInjection', log:'updateConfig'});
 				return updateConfig(_config);
 			})
 			.then(function(_) {
-				log.debug({f:'postInjection', log:'RedisTools.createJsonStream'});
+				// log.debug({f:'postInjection', log:'RedisTools.createJsonStream'});
 				_streamMachineCount = RedisTools.createJsonStream(_redis, InstancePool.REDIS_KEY_WORKER_POOL_TARGET_INSTANCES);
 				_streamMachineCount
 					.then(function(counts :TargetMachineCount) {
@@ -138,7 +178,6 @@ class WorkerProviderBase
 
 	public function setWorkerCount(newCount :Int) :Promise<Bool>
 	{
-		log.debug({f:'setWorkerCount', newCount:newCount});
 		// Log.info('setWorkerCount newCount=$newCount _targetWorkerCount=$_targetWorkerCount _actualWorkerCount=$_actualWorkerCount');
 		if (newCount > _config.maxWorkers || newCount < _config.minWorkers) {
 			//This can occur if counts are set in between config updates
@@ -147,6 +186,7 @@ class WorkerProviderBase
 		}
 		_targetWorkerCount = newCount;
 		if (_targetWorkerCount != _actualWorkerCount) {
+			log.debug({f:'setWorkerCount', newCount:newCount});
 			if (_updateCountPromise == null) {
 				_updateCountPromise = updateWorkerCount(_redis, _targetWorkerCount, this)
 					.then(function(currentCount) {
@@ -177,26 +217,10 @@ class WorkerProviderBase
 		}
 	}
 
-	/**
-	 * Sets the worker state to 'deferred' and marks it for actual
-	 * shutdown after some cloud provider specific delay.
-	 * @param  workerId :MachineId    [description]
-	 * @return          [description]
-	 */
 	public function removeWorker(workerId :MachineId) :Promise<Bool>
 	{
 		log.debug('WorkerProviderBase.removeWorker $workerId');
 		return destroyInstance(workerId);
-		// return getShutdownDelay(workerId)
-		// 	.pipe(function(delay) {
-		// 		var removalTimeStamp :TimeStamp = TimeStamp.now().addSeconds(delay.toSeconds());
-		// 		// Log.info('removeWorker $workerId delay=${delay.toString()} removalTimeStamp=$removalTimeStamp');
-		// 		return InstancePool.setWorkerTimeout(redis, workerId, removalTimeStamp)
-		// 			.then(function(_) {
-		// 				addWorkerToDeferred(workerId, removalTimeStamp);
-		// 				return true;
-		// 			});
-		// 	});
 	}
 
 	public function createWorker() :Promise<WorkerDefinition>
@@ -282,17 +306,21 @@ class WorkerProviderBase
 		if (delay.toFloat() < 0) {
 			delay = new Seconds(0.0);
 		}
+		var delayMs = delay.toMilliseconds().toInt();
+
+		//TODO: There is a bug in the deferred logic. For now:
+		// delay = new Minutes(45);
+		log.debug('addWorkerToDeferred workerId=$workerId removalTimeStamp=$removalTimeStamp delay=${delay.toMilliseconds().toInt()}');
 		var machineRemovalDelayed = {
 			id: workerId,
 			timeoutId: Node.setTimeout(function() {
 				_deferredRemovals = _deferredRemovals.filter(function(e) return e.id != workerId);
-				// Log.info('Shutdown deferred worker=$workerId delayMs=${delay} removalTimeStamp=${removalTimeStamp.toString()} now=${Date.now().toString()}');
+				log.debug('Shutdown deferred worker=$workerId delayMs=${delay} removalTimeStamp=${removalTimeStamp.toString()} now=${Date.now().toString()}');
 				InstancePool.setWorkerDeferredToRemoving(_redis, workerId);
-				// shutdownWorker(workerId);
-			}, delay.toMilliseconds().toInt()),
+			}, delayMs),
 			removalTime: removalTimeStamp
 		}
-		// Log.info('worker deferring for removal machine=$workerId removalTimeStamp=${removalTimeStamp.toString()} delay=${delay} now=${Date.now().toString()}');
+		// log.info('worker deferring for removal machine=$workerId removalTimeStamp=${removalTimeStamp.toString()} delay=${delay} now=${Date.now().toString()}');
 		_deferredRemovals.push(machineRemovalDelayed);
 		_deferredRemovals.sort(function(e1, e2) {
 			return e1.removalTime < e2.removalTime ? 1 : (e1.removalTime == e2.removalTime ? 0 : -1);
@@ -319,13 +347,17 @@ class WorkerProviderBase
 	 */
 	function getShutdownDelay(workerId :MachineId) :Promise<Minutes>
 	{
-		return Promise.promise(_config.billingIncrement);
+		if (_config.billingIncrement == null) {
+			return Promise.promise(new Minutes(0));
+		} else {
+			return Promise.promise(_config.billingIncrement);
+		}
 	}
 
 	var _instanceStatusCache = new Map<MachineId,MachineStatus>();
 	function onWorkerStatusUpdate(statuses :Array<StatusResult>)
 	{
-		log.debug({statuses:statuses, f:'onWorkerStatusUpdate'});
+		// log.debug({statuses:statuses, f:'onWorkerStatusUpdate'});
 		for (status in statuses) {
 			var instanceId = status.id;
 			if (_instanceStatusCache.get(instanceId) == status.status) {
@@ -355,10 +387,12 @@ class WorkerProviderBase
 								});
 						});
 				case Deferred:
+					log.debug('instance=$instanceId deferred');
 					getShutdownDelay(instanceId)
 						.pipe(function(delay) {
+							log.debug('instance=$instanceId TimeStamp.now()=${TimeStamp.now()} delay=${delay} delay.toSeconds()=${delay.toSeconds()}');
 							var removalTimeStamp :TimeStamp = TimeStamp.now().addSeconds(delay.toSeconds());
-							// Log.info('removeWorker $instanceId delay=${delay.toString()} removalTimeStamp=$removalTimeStamp');
+							log.debug('instance=$instanceId deferred removalTimeStamp=$removalTimeStamp');
 							return InstancePool.setWorkerTimeout(redis, instanceId, removalTimeStamp)
 								.then(function(_) {
 									addWorkerToDeferred(instanceId, removalTimeStamp);
@@ -382,7 +416,7 @@ class WorkerProviderBase
 						deferred.resolve(true);
 					});
 				promise.catchError(function(err) {
-					Log.error(err);
+					log.error(err);
 					deferred.resolve(false);
 				});
 				return deferred.boundPromise;
@@ -390,7 +424,7 @@ class WorkerProviderBase
 		});
 	}
 
-	public function updateConfig(config :ProviderConfigBase) :Promise<Bool>
+	public function updateConfig(config :ServiceConfigurationWorkerProvider) :Promise<Bool>
 	{
 		Assert.notNull(config);
 		Assert.notNull(config.maxWorkers);
@@ -400,7 +434,7 @@ class WorkerProviderBase
 			config.billingIncrement = new Minutes(0);
 		}
 		if (_config == null) {
-			_config = config;
+			_config = cast config;
 		} else {
 			_config.maxWorkers = config.maxWorkers;
 			_config.minWorkers = config.minWorkers;

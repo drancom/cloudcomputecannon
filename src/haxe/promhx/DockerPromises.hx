@@ -3,19 +3,18 @@ package promhx;
 import haxe.Json;
 
 #if nodejs
-import js.npm.Docker;
+import js.npm.docker.Docker;
 import js.node.stream.Readable;
 import js.node.stream.Readable.ReadableEvent;
 #end
 
 import promhx.Deferred;
-import promhx.Promise;
 import promhx.CallbackPromise;
 import promhx.deferred.DeferredPromise;
 
-using StringTools;
+import util.DockerUrl;
+
 using promhx.PromiseTools;
-using Lambda;
 
 class DockerPromises
 {
@@ -34,6 +33,18 @@ class DockerPromises
 		var promise = new promhx.CallbackPromise();
 		docker.listImages(promise.cb2);
 		return promise;
+	}
+
+	public static function hasImage(docker :Docker, imageUrl :DockerUrl) :Promise<Bool>
+	{
+		return listImages(docker)
+			.then(function(images) {
+				return images.exists(function(e) {
+					return e.RepoTags != null && e.RepoTags.exists(function(tag :DockerUrl) {
+						return DockerUrlTools.matches(imageUrl, tag);
+					});
+				});
+			});
 	}
 
 	public static function push(image :DockerImage, ?opts :{?tag :String}, ?auth :Dynamic) :Promise<Bool>
@@ -108,9 +119,9 @@ class DockerPromises
 			.thenTrue();
 	}
 
-	public static function removeContainer(container :DockerContainer, ?opts :RemoveContainerOpts) :Promise<Bool>
+	public static function removeContainer(container :DockerContainer, ?opts :RemoveContainerOpts, ?logString :String) :Promise<Bool>
 	{
-		return promhx.RetryPromise.pollDecayingInterval(__removeContainer.bind(container, opts), RETRIES, RETRIES_TIME_INTERVAL, 'removeContainer');
+		return promhx.RetryPromise.pollDecayingInterval(__removeContainer.bind(container, opts), RETRIES, RETRIES_TIME_INTERVAL, logString != null ? logString : 'removeContainer');
 	}
 
 	public static function wait(container :DockerContainer) :Promise<{StatusCode:Int}>
@@ -142,6 +153,18 @@ class DockerPromises
 		return promise;
 	}
 
+	public static function ensureImage(docker :Docker, image :String, ?opts :PullImageOptions) :Promise<Bool>
+	{
+		return DockerPromises.hasImage(docker, image)
+			.pipe(function(isImage) {
+				if (isImage) {
+					return Promise.promise(true);
+				} else {
+					return DockerPromises.pull(docker, image, opts);
+				}
+			});
+	}
+
 	public static function pull(docker :Docker, image :String, ?opts :PullImageOptions) :Promise<Bool>
 	{
 		var promise = new DeferredPromise();
@@ -149,24 +172,34 @@ class DockerPromises
 			if (err != null) {
 				Log.error('encountered error when pulling image: $image error: $err');
 				promise.boundPromise.reject(err);
+				promise = null;
 				return;
 			}
 
 			var errorEncounteredInStream :Bool = false;
 
-			// stream.on('close', function () {
 			// it doesn't send the 'close' event - DEH 20151221
 			stream.on(ReadableEvent.End, function () {
-				promise.resolve(!errorEncounteredInStream);
+				if (promise != null) {
+					promise.resolve(!errorEncounteredInStream);
+					promise = null;
+				}
 			});
 
-			stream.on(ReadableEvent.Data, function(buf :js.node.Buffer) {
-				if (buf != null) {
-					var bufferString = buf.toString();
+			function filterEmpty(s :String) {
+				return s != null && s.length > 0;
+			}
+
+			function trim(s :String) {
+				return s.trim();
+			}
+
+			function processLine(bufferString :String) {
+				try {
 					var data :{status :String, id:String, error :Dynamic} = Json.parse(bufferString);
 					if (data.status != null) {
 						if (data.status.startsWith('Status:')) {
-							Log.info(data.status);
+							// Log.trace(data.status);
 						}
 					} else if (data.error != null) {
 						Log.error('error: ${Json.stringify(data)}');
@@ -174,10 +207,38 @@ class DockerPromises
 					} else {
 						Log.error('Cannot handle stream data=$data');
 					}
+				} catch(err :Dynamic) {
+					traceRed('Could not parse ${bufferString} type=${untyped __typeof__(bufferString)}');
+				}
+			}
+
+			stream.on(ReadableEvent.Data, function(buf :js.node.Buffer) {
+				if (buf != null) {
+					var bufferString = buf.toString();
+					var lines = bufferString.split('\n')
+						.map(trim)
+						.filter(filterEmpty);
+					for (line in lines) {
+						processLine(line);
+					}
 				}
 			});
 		});
 
 		return promise.boundPromise;
+	}
+
+	public static function ping(docker :Docker) :Promise<Bool>
+	{
+		var promise = new CallbackPromise();
+		docker.ping(promise.cb1);
+		return promise.thenTrue();
+	}
+
+	public static function removeVolume(volume :DockerVolume) :Promise<Bool>
+	{
+		var promise = new promhx.CallbackPromise();
+		volume.remove(promise.cb1);
+		return promise;
 	}
 }

@@ -1,9 +1,0 @@
-compute:
-  command: ["haxe", "test/testsIntegration.hxml"]
-  environment:
-    AWS: "true"
-    DOCKER: "false"
-    VAGRANT: "false"
-
-elasticsearch:
-  log_driver: "none"

@@ -18,21 +18,19 @@ class StreamPromises
 		var deferred = new promhx.deferred.DeferredPromise();
 		var isResolvedOrRejected = false;
 		var disableErrorLogs = false;
-		var resolve = function() {
+		var resolve = function(event) {
 			if (!isResolvedOrRejected) {
 				isResolvedOrRejected = true;
-				// trace('resolving $errorContext');
 				deferred.resolve(true);
 			} else {
 				if (!disableErrorLogs) {
-					Log.error('Getting more than one call to resolve pipe promise');
+					Log.error('Getting more than one call to resolve pipe promise event=$event ${Std.string(errorContext)}');
 				}
 			}
 		}
-		var reject = function(e) {
+		var reject = function(e :Dynamic) {
 			if (!isResolvedOrRejected) {
 				isResolvedOrRejected = true;
-				// trace('rejecting $errorContext ${Std.string(e)}');
 				deferred.boundPromise.reject(e);
 			} else {
 				if (!disableErrorLogs) {
@@ -42,11 +40,10 @@ class StreamPromises
 		}
 		if (endEvents != null) {
 			for (endEvent in endEvents) {
-				writable.once(endEvent, resolve);
+				writable.once(endEvent, resolve.bind(endEvent));
 			}
-		}
-		if (endEvents == null || !endEvents.has(WritableEvent.Finish)) {
-			writable.on(WritableEvent.Finish, resolve);
+		} else {
+			writable.on(WritableEvent.Finish, resolve.bind(WritableEvent.Finish));
 		}
 
 		readable.on('response', function(response :{statusCode:Int}) {
@@ -63,7 +60,6 @@ class StreamPromises
 							//
 						}
 					}
-					// writable.end();
 				}
 			}
 		});
@@ -87,6 +83,14 @@ class StreamPromises
 
 	public static function streamToString(stream :IReadable) :Promise<String>
 	{
+		return streamToBuffer(stream)
+			.then(function(buffer) {
+				return buffer != null ? buffer.toString() : null;
+			});
+	}
+
+	public static function streamToBuffer(stream :IReadable) :Promise<Buffer>
+	{
 		var promise = new DeferredPromise();
 		var buffer :Buffer = null;
 		stream.on(ReadableEvent.Error, function(err) {
@@ -98,7 +102,7 @@ class StreamPromises
 		});
 		stream.once(ReadableEvent.End, function() {
 			if (!promise.isResolved()) {
-				promise.resolve(buffer != null ? buffer.toString() : null);
+				promise.resolve(buffer);
 			}
 		});
 		stream.on(ReadableEvent.Data, function(chunk :Buffer) {

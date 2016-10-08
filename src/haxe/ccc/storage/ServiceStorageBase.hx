@@ -1,15 +1,15 @@
 package ccc.storage;
 
-import haxe.Json;
+import ccc.storage.ServiceStorage;
+import ccc.storage.StorageTools;
 
 import js.node.Path;
 import js.node.stream.Readable;
 import js.node.stream.Writable;
 
-import promhx.Promise;
+import promhx.StreamPromises;
 
-import ccc.storage.ServiceStorage;
-import ccc.storage.StorageTools;
+import util.streams.StreamTools;
 
 using StringTools;
 
@@ -26,12 +26,12 @@ class ServiceStorageBase
 	public function postInjection()
 	{
 		Assert.notNull(_config);
-		Assert.notNull(_config.rootPath);
-		_rootPath = _config.rootPath;
+		setRootPath(_config.rootPath);
 	}
 
 	public function setConfig(config :StorageDefinition) :ServiceStorageBase
 	{
+		Assert.notNull(config);
 		_config = config;
 		postInjection();
 		return this;
@@ -44,7 +44,7 @@ class ServiceStorageBase
 
 	public function exists(path :String) :Promise<Bool>
 	{
-		throw 'Not implemented';
+		throw 'ServiceStorageBase.exists() Not implemented';
 		return null;
 	}
 
@@ -58,10 +58,10 @@ class ServiceStorageBase
 		return null;
 	}
 
-	public function getFileWritable(path :String) :Promise<IWritable>
-	{
-		return null;
-	}
+	// public function getFileWritable(path :String) :Promise<IWritable>
+	// {
+	// 	return null;
+	// }
 
 	public function copyFile(source :String, target :String) :Promise<Bool>
 	{
@@ -91,16 +91,21 @@ class ServiceStorageBase
 	public function setRootPath(val :String) :ServiceStorage
 	{
 		_rootPath = val;
+		if (_rootPath == null) {
+			_rootPath = '';
+		}
+		_rootPath = ensureEndsWithSlash(_rootPath);
 		return this;
 	}
 
 	public function getRootPath() :String
 	{
-		return _rootPath;
+		return _rootPath;// != null ? _rootPath : '';
 	}
 
 	public function appendToRootPath(path :String) :ServiceStorage
 	{
+		throw 'You need to override ServiceStorageBase.appendToRootPath()';
 		return null;
 	}
 
@@ -111,11 +116,12 @@ class ServiceStorageBase
 
 	public function getPath(p :String) :String
 	{
-		if (p != null && p.startsWith('/')) {
+		if (p == null) {
+			return _rootPath;
+		} else if (p.startsWith('/')) {
 			return p;
 		} else {
-			Assert.notNull(_rootPath);
-			return p == null ? _rootPath : Path.join(_rootPath, p);
+			return Path.join(_rootPath, p);
 		}
 	}
 
@@ -142,7 +148,7 @@ class ServiceStorageBase
 			throw 'Unable to reset Storage Service w/o a config';
 		}
 
-		return this.setRootPath(_config.rootPath);
+		return setRootPath(_config.rootPath);
 	}
 
 	public function getExternalUrl(?path :String) :String
@@ -150,8 +156,42 @@ class ServiceStorageBase
 		return path == null ? '' : path;
 	}
 
-	inline function get_type() :StorageSourceType
+	public function test() :Promise<ServiceStorageTestResult>
+	{
+		var randString = js.npm.shortid.ShortId.generate();
+		var stream = StreamTools.stringToStream(randString);
+		var clsNameTokens = Type.getClassName(Type.getClass(this)).split('.');
+		var fileName = clsNameTokens[clsNameTokens.length - 1] + "Test";
+		return writeFile(fileName, stream)
+			.pipe(function(_) {
+				return readFile(fileName)
+					.pipe(function(stream) {
+						return StreamPromises.streamToString(stream)
+							.then(function(out) {
+								var success = randString == out.trim();
+								return {success:success, write:true, read:true, error:null};
+							})
+							.errorPipe(function(err) {
+								return Promise.promise({success:false, write:true, read:false, error:Json.stringify(err)});
+							});
+					});
+			})
+			.errorPipe(function(err) {
+				return Promise.promise({success:false, write:false, read:false, error:Json.stringify(err)});
+			});
+	}
+
+	function get_type() :StorageSourceType
 	{
 		return _config.type;
+	}
+
+	function ensureEndsWithSlash(s :String) :String
+	{
+		if (s != null && s.length > 0 && s != '/' && !s.endsWith('/')) {
+			return s + '/';
+		} else {
+			return s;
+		}
 	}
 }

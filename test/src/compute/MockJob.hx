@@ -1,6 +1,5 @@
 package compute;
 
-import ccc.compute.Definitions;
 import ccc.compute.execution.Job;
 import ccc.compute.execution.BatchComputeDocker;
 
@@ -39,7 +38,8 @@ class MockJob extends Job
 						exitCode: jobExitCode,
 						JobWorkingStatus: workingStatus,
 						outputFiles: jobOutputFiles,
-						error: jobError
+						error: jobError,
+						copiedLogs: jobError == null
 					};
 					return jobResult;
 				} else {

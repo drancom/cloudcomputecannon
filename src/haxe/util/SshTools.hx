@@ -4,7 +4,7 @@ import haxe.Json;
 
 import js.node.Fs;
 import js.node.stream.Readable;
-import js.npm.Ssh;
+import js.npm.ssh2.Ssh;
 
 import js.node.stream.Readable;
 import js.node.stream.Writable;
@@ -31,7 +31,7 @@ typedef ExecResult = {
 
 class SshTools
 {
-	public static function getSsh(config :ConnectOptions, ?attempts :Int = 10, ?delayBetweenRetries :Int = 10, ?pollType:PollType, ?logPrefix :String, ?supressLogs :Bool= false) :Promise<SshClient>
+	public static function getSsh(config :ConnectOptions, ?attempts :Int = 10, ?delayBetweenRetries :Int = 10, ?pollType:PollType, ?logPrefix :String, ?supressLogs :Bool= false, ?attemptCallback :Void->Void) :Promise<SshClient>
 	{
 		if (pollType == null) {
 			pollType = PollType.regular;
@@ -42,6 +42,9 @@ class SshTools
 		Assert.notNull(config.host);
 		Assert.that(config.host != '');
 		function attemptSsh() {
+			if (attemptCallback != null) {
+				attemptCallback();
+			}
 			var promise = new DeferredPromise();
 			var ssh = new SshClient();
 
@@ -201,7 +204,7 @@ class SshTools
 					}, 0);
 				});
 
-				var base64Converter = js.npm.Base64Stream.decode();
+				var base64Converter = js.npm.base64stream.Base64Stream.decode();
 
 				//Pass errors along to the downstream stream.
 				readStream.on(ReadableEvent.Error, function(err) {

@@ -1,8 +1,6 @@
 package ccc.compute.server;
 
-import ccc.compute.cli.CliTools.*;
-import ccc.compute.Definitions;
-import ccc.compute.Definitions.Constants.*;
+import ccc.compute.client.ClientTools;
 import ccc.compute.InitConfigTools;
 import ccc.compute.workers.WorkerProviderBoot2Docker;
 import ccc.compute.workers.WorkerProviderVagrantTools;
@@ -13,13 +11,14 @@ import ccc.storage.ServiceStorageLocalFileSystem;
 
 import haxe.Json;
 import haxe.Resource;
+import haxe.Template;
 
 import js.Node;
 import js.node.Os;
 import js.node.Path;
-import js.npm.FsExtended;
-import js.npm.Docker;
-import js.npm.Ssh;
+import js.npm.fsextended.FsExtended;
+import js.npm.docker.Docker;
+import js.npm.ssh2.Ssh;
 
 import promhx.Promise;
 import promhx.RequestPromises;
@@ -37,6 +36,7 @@ import yaml.Yaml;
 using Lambda;
 using StringTools;
 using promhx.PromiseTools;
+using t9.util.ColorTraces;
 
 typedef ProviderConfig=ServiceConfigurationWorkerProvider;
 
@@ -132,12 +132,14 @@ class ProviderTools
 
 	public static function createServerInstance(config :ProviderConfig) :Promise<InstanceDefinition>
 	{
-		trace('Creating ${config.type} ${Constants.APP_NAME} server');
+		var cloudConfig :CloudProvider = config;
+		var shortConfigName = cloudConfig.getShortName();
+		traceYellow('  - creating $shortConfigName ${Constants.APP_NAME} server');
 		return switch(config.type) {
 			case boot2docker:
 				return Promise.promise(WorkerProviderBoot2Docker.getLocalDockerWorker());
 			case vagrant:
-				throw "This is currently broken";
+				throw "Vagrant install is currently broken";
 				//TODO: this should be easy
 				var path = Constants.SERVER_VAGRANT_DIR;//Path.join()
 				// var id :MachineId = ComputeTools.createUniqueId();
@@ -146,32 +148,19 @@ class ProviderTools
 				FsExtended.ensureDirSync(path);
 				var streams :util.streams.StdStreams = {out:js.Node.process.stdout, err:js.Node.process.stderr};
 				return WorkerProviderVagrantTools.ensureWorkerBox(path, address, null, streams)
-				// return ccc.compute.workers.VagrantTools.ensureVagrantBoxRunning(path, streams)
 					.pipe(function(vagrant) {
 						return WorkerProviderVagrantTools.getWorkerDefinition(path);
 						trace('vagrant=${vagrant}');
 						return null;
-					})
-					.then(function(def) {
-						trace('def=${def}');
-						return def;
 					});
 				return Promise.promise(null);
 			case pkgcloud:
 				var provider = WorkerProviderTools.getProvider(cast config);
-				// trace('provider=${provider}');
-				trace('createIndependentWorker');
 				return provider.createServer();
-			case mock:
+			default:
 				return Promise.promise(null);
 		}
 	}
-
-	// public static function isServerConfigStoredLocally() :Promise<Bool>
-	// {
-	// 	var base = Path.dirname(SERVER_CONNECTION_FILE);
-	// 	return Promise.promise(FsExtended.existsSync(base) && FsExtended.existsSync(SERVER_CONNECTION_FILE));
-	// }
 
 	public static function isServerInstalled(serverDefinition :InstanceDefinition) :Promise<Bool>
 	{
@@ -199,14 +188,14 @@ class ProviderTools
 		var instance = serverBlob.server;
 		return Promise.promise(true)
 			.pipe(function(_) {
-				js.Node.process.stdout.write('Checking for docker-compose...');
+				js.Node.process.stdout.write('    - Checking for docker-compose:'.yellow());
 				return checkForDockerCompose(instance.ssh)
 					.pipe(function(isInstalled) {
 						if (isInstalled) {
-							js.Node.process.stdout.write('installed\n');
+							js.Node.process.stdout.write('installed\n'.green());
 							return Promise.promise(true);
 						} else {
-							js.Node.process.stdout.write('not installed...');
+							Node.process.stdout.write('not installed\n'.yellow());
 							return installDockerCompose(instance)
 								.thenTrue();
 						}
@@ -214,29 +203,32 @@ class ProviderTools
 			})
 			//Check for the server docker container is running
 			.pipe(function(_) {
-				js.Node.process.stdout.write('Check for cloud-compute-cannon server running...');
+				js.Node.process.stdout.write('  - Check for cloud-compute-cannon server running...'.yellow());
 				return checkServerRunning(instance)
 					.pipe(function(ok) {
+						js.Node.process.stdout.write(ok ? 'OK\n'.green() : '!\n'.red());
 						if (ok && !force) {
-							js.Node.process.stdout.write('confirmed running.\n');
 							return Promise.promise(true);
 						} else {
 							if (ok && force) {
-								js.Node.process.stdout.write('confirmed running, but forcing re-install...');
+								traceYellow('    - confirmed running, but forcing re-install');
 							} else {
-								js.Node.process.stdout.write('not running, installing, first copy files...');
+								traceYellow('    - installing');
 							}
 							//Install the server via compose
 							return Promise.promise(true)
 								.pipe(function(_) {
+									traceYellow('      - copy files');
 									return copyFilesForRemoteServer(serverBlob);
 								})
 								.pipe(function(_) {
+									traceGreen('        - done');
 									if (uploadOnly) {
 										return Promise.promise(true);
 									} else {
-										js.Node.process.stdout.write('starting server stack...');
-										return runDockerComposedServer(instance);
+										traceYellow('    - starting server stack');
+										return runDockerComposedServer(instance.ssh)
+											.traceThen('      - done'.green());
 									}
 								});
 						}
@@ -278,17 +270,7 @@ class ProviderTools
 	public static function checkServerRunning(instance :InstanceDefinition, ?swallowErrors :Bool = true) :Promise<Bool>
 	{
 		var host = getServerHost(new HostName(instance.ssh.host));
-		var url = 'http://$host/checks';
-		return RequestPromises.get(url)
-			.then(function(out) {
-				return out.trim() == SERVER_PATH_CHECKS_OK;
-			})
-			.errorPipe(function(err) {
-				if (!swallowErrors) {
-					Log.error({error:err, url:url});
-				}
-				return Promise.promise(false);
-			});
+		return ClientTools.isServerListening(host, swallowErrors);
 	}
 
 	public static function serverCheck(serverBlob :ServerConnectionBlob) :Promise<ServerCheckResult>
@@ -392,11 +374,11 @@ class ProviderTools
 		return promhx.Promise.whenAll(
 			[
 				util.DockerTools.ensureContainer(docker, 'redis:3', 'name', SERVER_CONTAINER_TAG_REDIS),
-				util.DockerTools.ensureContainer(docker, 'registry:2', 'name', SERVER_CONTAINER_TAG_REGISTRY, null, [Constants.REGISTRY_DEFAULT_PORT=>5000])
+				util.DockerTools.ensureContainer(docker, 'registry:2', 'name', SERVER_CONTAINER_TAG_REGISTRY, null, [Constants.REGISTRY_DEFAULT_PORT=>REGISTRY_DEFAULT_PORT])
 			])
 		.pipe(function(_) {
 			trace('Redis and registry containers running...');
-			var tarStream = js.npm.TarFs.pack(dockerDir);//Build docker image, create tar stream
+			var tarStream = js.npm.tarfs.TarFs.pack(dockerDir);//Build docker image, create tar stream
 			trace('building server docker image');
 			//Perhaps incorporate a unique key, so that others cannot access the internal server
 			return DockerTools.buildDockerImage(docker, APP_NAME_COMPACT, tarStream, null)
@@ -443,54 +425,36 @@ class ProviderTools
 	static function installDockerCompose(instance :InstanceDefinition) :Promise<InstanceDefinition>
 	{
 		var remoteScriptPath = '/tmp/install_docker_compose.sh';
-		js.Node.process.stdout.write('...installing docker-compose');
+		js.Node.process.stdout.write('      - installing docker-compose\n'.yellow());
 		// trace('remoteScriptPath=${remoteScriptPath}');
 		return Promise.promise(true)
 			//Copy the docker-compose install script
 			.pipe(function(_) {
-				js.Node.process.stdout.write('...copying install script');
+				js.Node.process.stdout.write('        - copying install script\n'.yellow());
 				Assert.notNull(Resource.getString(SERVER_INSTALL_COMPOSE_SCRIPT));
 				return SshTools.writeFileString(instance.ssh, remoteScriptPath, Resource.getString(SERVER_INSTALL_COMPOSE_SCRIPT));
 			})
 			//Run the docker-compose script
 			.pipe(function(_) {
-				js.Node.process.stdout.write('...executing');
+				js.Node.process.stdout.write('        - executing install script\n'.yellow());
 				return SshTools.execute(instance.ssh, 'sudo sh $remoteScriptPath');
 			})
 			.then(function(_) {
-				js.Node.process.stdout.write('...done\n');
+				js.Node.process.stdout.write('        - done\n'.green());
 				return instance;
 			});
 	}
 
-	static function runDockerComposedServer(instance :InstanceDefinition) :Promise<Bool>
+	static function runDockerComposedServer(ssh :ConnectOptions) :Promise<Bool>
 	{
-		return Promise.promise(true)
-			.pipe(function(_) {
-				//Docker stop
-				return stopDockerComposedServer(instance);
-			})
-			.pipe(function(_) {
-				//Docker up
-				return SshTools.execute(instance.ssh, 'cd ${Constants.APP_NAME_COMPACT} && sudo docker-compose build compute')
-					.then(function(execResult) {
-						trace('execResult=${execResult}');
-						if (execResult.code != 0) {
-							throw execResult;
-						}
-						return true;
-					});
-			})
-			.pipe(function(_) {
-				//Docker up
-				return SshTools.execute(instance.ssh, 'cd ${Constants.APP_NAME_COMPACT} && sudo docker-compose up -d')
-					.then(function(execResult) {
-						trace('execResult=${execResult}');
-						if (execResult.code != 0) {
-							throw execResult;
-						}
-						return true;
-					});
+		var dc ="/opt/bin/docker-compose -f docker-compose.yml -f docker-compose.prod.yml";
+		var command = 'cd ${Constants.APP_NAME_COMPACT} && $dc stop && $dc rm -f && $dc build && $dc up -d';
+		return SshTools.execute(ssh, command, 10, 10, null, null, true)
+			.then(function(execResult) {
+				if (execResult.code != 0) {
+					throw execResult;
+				}
+				return true;
 			});
 	}
 
@@ -541,7 +505,7 @@ class ProviderTools
 					promise.boundPromise.reject(err);
 					return;
 				}
-				untyped __js__('container.modem.demuxStream(stream, process.stdout, process.stderr)');
+				untyped __js__('container.modem.demuxStream({0}, {1}, {2})', stream, Node.process.stdout, Node.process.stderr);
 				container.start(function(err, data) {
 					if (err != null) {
 						promise.boundPromise.reject(err);
@@ -558,6 +522,11 @@ class ProviderTools
 
 	public static function copyFilesForRemoteServer(serverBlob :ServerConnectionBlob) :Promise<Bool>
 	{
+		if (serverBlob.provider == null) {
+			var p = new Promise();
+			p.reject('Missing serverBlob.provider');
+			return p;
+		}
 		//Ensure the hostname
 		Constants.SERVER_HOSTNAME_PUBLIC = serverBlob.server.hostPublic;
 		Constants.SERVER_HOSTNAME_PRIVATE = serverBlob.server.hostPrivate;
@@ -565,7 +534,7 @@ class ProviderTools
 		var storage = ccc.storage.ServiceStorageSftp.fromInstance(instance).appendToRootPath(Constants.APP_NAME_COMPACT);
 		return Promise.promise(true)
 			.pipe(function(_) {
-				return storage.writeFile('$SERVER_MOUNTED_CONFIG_FILE', StreamTools.stringToStream(Json.stringify(serverBlob.provider, null, '\t')));
+				return storage.writeFile('$SERVER_MOUNTED_CONFIG_FILE_NAME', StreamTools.stringToStream(Json.stringify(serverBlob.provider, null, '\t')));
 			})
 			.pipe(function(_) {
 				return copyServerFiles(storage);
@@ -577,8 +546,8 @@ class ProviderTools
 		var localStorage = ServiceStorageLocalFileSystem.getService(path);
 		return ProviderTools.copyServerFiles(localStorage)
 			.pipe(function(_) {
-				var defaultServerConfigString = Json.stringify(InitConfigTools.getDefaultConfig(), null, '\t');
-				return localStorage.writeFile('serverconfig.json', StreamTools.stringToStream(defaultServerConfigString));
+				var defaultServerConfigString = Yaml.render(InitConfigTools.getDefaultConfig());
+				return localStorage.writeFile(SERVER_MOUNTED_CONFIG_FILE_NAME, StreamTools.stringToStream(defaultServerConfigString));
 			})
 			.pipe(function(_) {
 				var promises = [
@@ -595,8 +564,7 @@ class ProviderTools
 
 	static function copyServerFiles(storage :ServiceStorage) :Promise<Bool>
 	{
-		js.Node.process.stdout.write('...copying files to ${storage.toString()}...');
-
+		// trace('...copying files to ${storage.toString()}...');
 		return Promise.promise(true)
 			//Copy non-template files first. Don't copy files that also have a template version
 			.pipe(function(_) {
@@ -610,9 +578,11 @@ class ProviderTools
 					var content = Resource.getString(resourceName);
 					var name = resourceName.startsWith('etc/server/') ? resourceName.replace('etc/server/', '') : resourceName;
 					var path = name;
-					promises.push(storage.writeFile(path, StreamTools.stringToStream(content)));
+					promises.push(function() {
+						return storage.writeFile(path, StreamTools.stringToStream(content));
+					});
 				}
-				return Promise.whenAll(promises);
+				return PromiseTools.chainPipePromises(promises);
 			})
 			//Copy the templates afterwards so they overwrite non-template files
 			.pipe(function(_) {
@@ -623,9 +593,18 @@ class ProviderTools
 					var name = resourceName.startsWith('etc/server/') ? resourceName.replace('etc/server/', '') : resourceName;
 					name = name.substr(0, name.length - '.template'.length);
 					var path = name;
-					promises.push(storage.writeFile(path, StreamTools.stringToStream(content)));
+					promises.push(function() {
+						return storage.writeFile(path, StreamTools.stringToStream(content));
+					});
 				}
-				return Promise.whenAll(promises);
+				return PromiseTools.chainPipePromises(promises);
+			})
+			//Copy the docker-compose.prod.yml which is not quite a template
+			.pipe(function(_) {
+				var dockerComposeProdString = Resource.getString('docker-compose.prod.yml');
+				var gitSha = Version.getGitCommitHash().substr(0,8);
+				dockerComposeProdString = dockerComposeProdString.replace("${VERSION}", gitSha);
+				return storage.writeFile('docker-compose.prod.yml', StreamTools.stringToStream(dockerComposeProdString));
 			})
 			.then(function(_) {
 				return true;

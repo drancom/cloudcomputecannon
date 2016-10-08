@@ -6,7 +6,6 @@ package ccc.compute.workers;
 
 import js.npm.RedisClient;
 
-import ccc.compute.Definitions;
 import ccc.compute.InstancePool;
 
 import promhx.Promise;
@@ -15,12 +14,12 @@ import t9.abstracts.net.*;
 
 interface WorkerProvider
 {
-	var id (default, null) :String;
+	var id (default, null) :ServiceWorkerProviderType;
 	var redis (get, null) :RedisClient;
 	var ready (get, null) :Promise<Bool>;
 	var log (default, null) :AbstractLogger;
 
-	function updateConfig(config :ProviderConfigBase) :Promise<Bool>;
+	function updateConfig(config :ServiceConfigurationWorkerProvider) :Promise<Bool>;
 
 	function setPriority(val :Int) :Promise<Bool>;
 	function setMaxWorkerCount(val :WorkerCount) :Promise<Bool>;

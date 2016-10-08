@@ -10,14 +10,14 @@ import js.node.Path;
 import js.node.Fs;
 import js.node.Http;
 import js.npm.FsPromises;
-import js.npm.HttpPromises;
-import js.npm.FsExtended;
+import js.npm.fsextended.FsExtended;
 import js.npm.RedisClient;
 
 import promhx.Promise;
 import promhx.Deferred;
 import promhx.Stream;
 import promhx.deferred.DeferredPromise;
+import promhx.RequestPromises;
 
 import util.RedisTools;
 import ccc.storage.ServiceStorage;
@@ -60,13 +60,13 @@ class TestStorageRestAPI extends haxe.unit.async.PromiseTest
 			.pipe(function(_) {
 				//Test reading
 				var url = 'http://localhost:' + port + apiPath + testFile;
-				return HttpPromises.get(url);
+				return RequestPromises.get(url);
 			})
 			.pipe(function(body) {
 				assertEquals(body, fileContent1);
 				//Test writing
 				var url = 'http://localhost:' + port + apiPath + testFile;
-				return HttpPromises.post(url, fileContent2);
+				return RequestPromises.post(url, fileContent2);
 			})
 			.pipe(function(response) {
 				return FsPromises.readFile(testFilePath);

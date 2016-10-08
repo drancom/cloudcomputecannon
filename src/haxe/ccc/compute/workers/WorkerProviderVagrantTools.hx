@@ -7,12 +7,12 @@ import js.Node;
 import js.node.Path;
 import js.node.Fs;
 
-import js.npm.Docker;
-import js.npm.FsExtended;
+import js.npm.docker.Docker;
+import js.npm.fsextended.FsExtended;
 import js.npm.FsPromises;
 import js.npm.RedisClient;
-import js.npm.Ssh;
-import js.npm.Vagrant;
+import js.npm.ssh2.Ssh;
+import js.npm.vagrant.Vagrant;
 
 import promhx.Promise;
 import promhx.deferred.DeferredPromise;
@@ -20,7 +20,6 @@ import promhx.RedisPromises;
 
 import ccc.compute.ComputeTools;
 import ccc.compute.InstancePool;
-import ccc.compute.Definitions;
 import ccc.compute.workers.VagrantTools;
 
 import util.SshTools;
@@ -86,7 +85,7 @@ class WorkerProviderVagrantTools
 	static function XXcleanup(redis :RedisClient, rootPath :String, ?streams :StdStreams) :Promise<Bool>
 	{
 		var ip;
-		return InstancePool.removeInstances(redis, ID)
+		return InstancePool.removeInstances(redis, ServiceWorkerProviderType.vagrant)
 			.pipe(function(machineIds :Array<MachineId>) {
 				machineIds = machineIds == null || Reflect.fields(machineIds).length == 0 ? [] : machineIds;
 				var promises: Array<Promise<Bool>> = machineIds.map(function(id :MachineId) {
@@ -160,7 +159,7 @@ class WorkerProviderVagrantTools
 				Assert.notNull(def.ssh.host, '$path failed to return a host value $def');
 				Assert.that(def.ssh.host != '', '$path failed to return a host value $def');
 				//Update the machine definition
-				return InstancePool.addInstance(redis, ID, machineDef, machineParams, MachineStatus.Available);
+				return InstancePool.addInstance(redis, ServiceWorkerProviderType.vagrant, machineDef, machineParams, MachineStatus.Available);
 			})
 			.pipe(function(_) {
 				return ComputeQueue.processPending(redis);
@@ -271,13 +270,13 @@ class WorkerProviderVagrantTools
 			});
 	}
 
-	public static function getDockerConfig(path :VagrantPath) :Promise<ConstructorOpts>
+	public static function getDockerConfig(path :VagrantPath) :Promise<DockerConnectionOpts>
 	{
 		var ssh;
 		var sshConfig;
 		return getSshConfig(path)
 			.then(function(config :ConnectOptions) {
-				var dockerDef :ConstructorOpts = {
+				var dockerDef :DockerConnectionOpts = {
 					host: config.host,
 					port: 2375,
 					protocol: 'http'
@@ -346,7 +345,7 @@ class WorkerProviderVagrantTools
 
 		return RedisPromises.del(redis, REDIS_IP_ADDRESS_POOL)
 			.pipe(function(_) {
-				return InstancePool.getInstancesInPool(redis, ID);
+				return InstancePool.getInstancesInPool(redis, ServiceWorkerProviderType.vagrant);
 			})
 
 			.pipe(function(result :Array<StatusResult>) {
@@ -371,7 +370,7 @@ class WorkerProviderVagrantTools
 						var vagrantInstancePath :VagrantPath = vagrantMachineIds.get(vagrantId);
 						var promise = getWorkerDefinition(vagrantInstancePath)
 							.pipe(function(workerDef) {
-								return InstancePool.addInstance(redis, ID, workerDef, {cpus:CPUS_PER_MACHINE, memory:0})//TODO: get the cpus from the Vagrant info
+								return InstancePool.addInstance(redis, ServiceWorkerProviderType.vagrant, workerDef, {cpus:CPUS_PER_MACHINE, memory:0})//TODO: get the cpus from the Vagrant info
 									.pipe(function(_) {
 										return RedisPromises.hset(redis, REDIS_MACHINE_TO_DIR, workerDef.id, vagrantInstancePath);
 									})
@@ -495,7 +494,7 @@ class WorkerProviderVagrantTools
 	public static function getVagrantStatus(path :VagrantPath) :Promise<VagrantStatus>
 	{
 		return VagrantTools.getMachineStatus(path)
-			.then(function(status :js.npm.Vagrant.StatusResult) {
+			.then(function(status :js.npm.vagrant.Vagrant.StatusResult) {
 				return {id:path.getMachineId(), path:path, status:status.status};
 			});
 	}

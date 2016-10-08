@@ -1,147 +1,331 @@
 package ccc.storage;
 
+/**
+ CORS configuration:
+
+<?xml version="1.0" encoding="UTF-8"?>
+<CORSConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/">
+    <CORSRule>
+        <AllowedOrigin>*</AllowedOrigin>
+        <AllowedMethod>GET</AllowedMethod>
+        <AllowedMethod>PUT</AllowedMethod>
+        <AllowedMethod>POST</AllowedMethod>
+        <AllowedMethod>DELETE</AllowedMethod>
+        <AllowedMethod>HEAD</AllowedMethod>
+        <AllowedHeader>*</AllowedHeader>
+    </CORSRule>
+</CORSConfiguration>
+
+Bucket policy (where <USER> is the id of the user account, and
+<BUCKET_NAME> is the name of the S3 bucket:
+
+{
+	"Version": "2008-10-17",
+	"Statement": [
+		{
+			"Sid": "",
+			"Effect": "Allow",
+			"Principal": {
+				"AWS": "arn:aws:iam::763896067184:user/<USER>"
+			},
+			"Action": [
+				"s3:ListBucket",
+				"s3:GetBucketLocation"
+			],
+			"Resource": "arn:aws:s3:::<BUCKET_NAME>"
+		},
+		{
+			"Sid": "",
+			"Effect": "Allow",
+			"Principal": {
+				"AWS": "arn:aws:iam::763896067184:user/<USER>"
+			},
+			"Action": [
+				"s3:PutObject",
+				"s3:GetObject",
+				"s3:DeleteObject",
+				"s3:DeleteObjectVersion",
+				"s3:RestoreObject",
+				"s3:GetObjectVersion"
+			],
+			"Resource": "arn:aws:s3:::<BUCKET_NAME>/*"
+		},
+		{
+			"Sid": "",
+			"Effect": "Allow",
+			"Principal": "*",
+			"Action": "s3:GetObject",
+			"Resource": "arn:aws:s3:::<BUCKET_NAME>/*"
+		}
+	]
+}
+ */
+
+import ccc.compute.Definitions;
+import ccc.storage.ServiceStorage;
+import ccc.storage.*;
+
 import js.node.stream.Readable;
 import js.node.stream.Writable;
-
-import js.npm.PkgCloud;
+import js.node.Fs;
+import js.npm.aws.AWS;
+import js.npm.fsextended.FsExtended;
 
 import promhx.Promise;
+import promhx.PromiseTools;
 import promhx.StreamPromises;
 import promhx.deferred.DeferredPromise;
 
-import ccc.compute.Definitions;
-import ccc.storage.ServiceStorageBase;
-import ccc.storage.StorageSourceType;
-import ccc.storage.StorageDefinition;
-
-using StringTools;
 using Lambda;
+using StringTools;
 
 class ServiceStorageS3 extends ServiceStorageBase
 {
-	private var _defaultContainerName :String = "bionano-platform-test"; // we always need a bucket
+	var _containerName :String = "bionano-platform-test"; // we always need a bucket
+	var _httpAccessUrl :String;
+	var _S3 :AWSS3;
+	var _initialized :Promise<Bool>;
+	var _S3Config :ccc.docker.dataxfer.DockerDataTools.S3Credentials;
+
 
 	private static var precedingSlash = ~/^\/+/;
 	private static var endingSlash = ~/\/+$/;
 	private static var extraSlash = ~/\/{2,}/g;
-
 	private static var splitRegEx = ~/\/+/g;
 	private static var replaceChar :String = "--";
+
+	static var TEMP_FILE_PATH_DIR = '/tmp';
+	static var TEMP_FILE_PATH_PREFIX = 'tmpfileS3';
+	static var TEMP_FILES_CLEANED = false;
 
 	public function new()
 	{
 		super();
 	}
 
-	private function getClient() :StorageClientP
+	override public function toString()
 	{
-		return _config.storageClient;
+		return '[StorageS3 _rootPath=$_rootPath container=${_containerName} _httpAccessUrl=${_httpAccessUrl}]';
 	}
 
-	public function getContainerName(?options: Dynamic) :String {
-		if (options != null && options.container != null) {
-			return options.container;
-		}
+	public function getS3Credentials() :ccc.docker.dataxfer.DockerDataTools.S3Credentials
+	{
+		return Reflect.copy(_S3Config);
+	}
 
-		return _defaultContainerName;
+	function initialized() :Promise<Bool>
+	{
+		if (_initialized == null) {
+			if (!TEMP_FILES_CLEANED) {
+				TEMP_FILES_CLEANED = true;
+				//Remove prior tmp files
+				var filterStartingWith = '${TEMP_FILE_PATH_DIR}/${TEMP_FILE_PATH_PREFIX}';
+				var existingTmpFiles = FsExtended.listAllSync(TEMP_FILE_PATH_DIR,
+					{
+						recursive:false,
+						prependDir:true,
+						filter:function(itemPath :String, stat:Dynamic) {
+							return itemPath.startsWith(filterStartingWith);
+						}
+					});
+				existingTmpFiles.iter(function(path) {
+					try {
+						traceYellow('Deleting $path');
+						FsExtended.deleteFileSync(path);
+					} catch(e :Dynamic) {
+						Log.warn('Could not delete prior tmp file=$path err=$e');
+					}
+				});
+			}
+
+			var promise = new DeferredPromise();
+			_initialized = promise.boundPromise;
+			_S3.getBucketPolicy({Bucket:_containerName}, function(err, data) {
+				if (err != null) {
+					//For now, throw an error and crash. S3 buckets need to be
+					//set up manually for now
+					promise.boundPromise.reject(err);
+					//No bucket exists, let's create one
+					// var createBucketOptions = {
+					// 	Bucket: _containerName,
+					// 	ACL: 'public-read',
+					// 	CreateBucketConfiguration: {
+					// 		LocationConstraint: _config.credentials.region,
+					// 	},
+					// 	GrantFullControl: 'FULL_CONTROL'
+					// }
+					// _S3.createBucket(createBucketOptions, function(err, result) {
+					// 	if (err != null) {
+					// 		promise.boundPromise.reject(err);
+					// 	} else {
+					// 		promise.resolve(true);
+					// 	}
+					// });
+				} else {
+					promise.resolve(true);
+				}
+			});
+		}
+		return _initialized;
+	}
+
+	function getClient() :AWSS3
+	{
+		return _S3;
+	}
+
+	public function getContainerName(?options: Dynamic) :String
+	{
+		return _containerName;
 	}
 
 	override public function setConfig(config :StorageDefinition) :ServiceStorageBase
 	{
-		if (config.defaultContainer != null) {
-			_defaultContainerName = config.defaultContainer;
+		Assert.notNull(config.container);
+		Assert.notNull(config.credentials);
+		Assert.notNull(config.container);
+
+		_containerName = config.container;
+
+		var awsConfig = {
+			accessKeyId: config.credentials.accessKeyId != null ? config.credentials.accessKeyId : config.credentials.keyId,
+			secretAccessKey: config.credentials.secretAccessKey != null ? config.credentials.secretAccessKey : config.credentials.key,
+			region: config.credentials.region,
+			maxRetries: config.credentials.maxRetries
 		}
+		_S3Config = {keyId:awsConfig.accessKeyId, key:awsConfig.secretAccessKey, region:awsConfig.region, bucket:config.container};
+
+		Assert.notNull(awsConfig.accessKeyId);
+		Assert.notNull(awsConfig.secretAccessKey);
+
+		Sys.environment()['AWS_S3_KEYID'] = awsConfig.accessKeyId;
+		Sys.environment()['AWS_S3_KEY'] = awsConfig.secretAccessKey;
+		Sys.environment()['AWS_S3_BUCKET'] = config.container;
+
+		_httpAccessUrl = ensureEndsWithSlash(config.httpAccessUrl != null ? config.httpAccessUrl : 'https://${_containerName}.s3.amazonaws.com/');
+		_S3 = new AWSS3(awsConfig);
 
 		return super.setConfig(config);
 	}
 
-	public function convertPath(?path: String) :String
+	override public function clone() :ServiceStorage
 	{
-		path = ((path != null) ? path : '');
-		path = (_rootPath + path);
+		var copy = new ServiceStorageS3();
+		var config = Reflect.copy(_config);
+		config.httpAccessUrl = _httpAccessUrl;
+		config.container = _containerName;
+		config.rootPath = _rootPath;
+		//This avoids cop
+		copy.setConfig(config);
+		return copy;
+	}
 
-		// strip preceding slash
-		var result = precedingSlash.replace(path, '');
-
-		// AWS S3 allows path-like object names so this functionality isn't necessary
-		// convert a path to a container replacing / with -
-//		result = splitRegEx.replace(result, replaceChar);
-
-		return result;
+	override public function exists(path :String) :Promise<Bool>
+	{
+		path = getPath(path);
+		return initialized()
+			.pipe(function(_) {
+				var promise = new DeferredPromise();
+				var params = {Bucket: _containerName, Key: path};
+				_S3.headObject(params, function(err, data) {
+					if (err != null && Reflect.field(err, 'code') == 'NotFound') {
+						promise.resolve(false);
+					} else if (err != null) {
+						promise.boundPromise.reject(err);
+					} else {
+						promise.resolve(true);
+					}
+				});
+				return promise.boundPromise;
+			});
 	}
 
 	override public function readFile(path :String) :Promise<IReadable>
 	{
-		var client = this.getClient();
-		var options :Dynamic = {
-			container: this.getContainerName(),
-			remote: convertPath(path)
-		};
-
-		try {
-			var readStream = client.download(options);
-
-			readStream.on('error', function(err) {
-				Log.error('ERROR (THIS IS OUT OF THE PROMISE CHAIN) ServiceStorageS3.readFile path=$path err=$err');
+		return exists(path)
+			.pipe(function(file_exists) {
+				if (file_exists) {
+					path = getPath(path);
+					var promise = new DeferredPromise();
+					var params = {Bucket: _containerName, Key: path};
+					promise.resolve(_S3.getObject(params).createReadStream());
+					return promise.boundPromise;
+				} else {
+					return PromiseTools.error('Does not exist: $path');
+				}
 			});
-
-			return Promise.promise(readStream);
-		} catch(err :Dynamic) {
-			return Promise.promise(true)
-				.then(function(_) {
-					throw err;
-					return null;
-				});
-		}
 	}
 
 	override public function readDir(?path :String) :Promise<IReadable>
 	{
-		throw 'Not implemented';
+		throw 'readDir(...) Not implemented';
 		return null;
 	}
 
 	override public function writeFile(path :String, data :IReadable) :Promise<Bool>
 	{
-		return this.getFileWritable(path)
-			.pipe(function(writeStream) {
-				return StreamPromises.pipe(data, writeStream, [WritableEvent.Finish], 'ServiceStorageS3.writeFile path=$path');
-			});
-	}
-
-	override public function getFileWritable(path :String) :Promise<IWritable>
-	{
-		var client = this.getClient();
-		var options :Dynamic = {
-			container: this.getContainerName(),
-			remote: convertPath(path)
-		};
-		try {
-			var writeStream = client.upload(options);
-
-			writeStream.on(WritableEvent.Error, function(err) {
-				Log.error('ERROR (THIS IS OUT OF THE PROMISE CHAIN) writing file path=$path err=$err');
-			});
-			var isFinished = false;
-			writeStream.once(WritableEvent.Finish, function() {
-				isFinished = true;
-			});
-			writeStream.on('success', function(file) {
-				js.Node.setImmediate(function() {
-					if (!isFinished) {
-						writeStream.emit(WritableEvent.Finish, writeStream);
+		Assert.notNull(data);
+		path = getPath(path);
+		var tempFileName :String = null;
+		var cleanup = function() {
+			if (tempFileName != null) {
+				Node.setTimeout(function() {
+					if (tempFileName != null) {
+						Fs.unlink(tempFileName, function(err) {
+							//Ignored
+						});
+						tempFileName = null;
 					}
-				});
-			});
-
-			return Promise.promise(writeStream);
-		}  catch(err :Dynamic) {
-			return Promise.promise(true)
-				.then(function(_) {
-					throw err;
-					return null;
-				});
+				}, 1000);
+			}
 		}
+		return initialized()
+			.pipe(function(_) {
+				if (Reflect.hasField(data, 'read')) {
+					return Promise.promise(data);
+				} else {
+					var tempFileToken = js.node.Path.basename(path);
+					tempFileName = '${TEMP_FILE_PATH_DIR}/${TEMP_FILE_PATH_PREFIX}_${js.npm.shortid.ShortId.generate()}_${tempFileToken}';
+					return StreamPromises.pipe(data, Fs.createWriteStream(tempFileName), [WritableEvent.Finish], 'ServiceStorageS3.writeFile $path')
+						.then(function(done) {
+							try {
+								Fs.accessSync(tempFileName);//Throws if there is an accessibility issue
+								return cast Fs.createReadStream(tempFileName);
+							} catch(err :Dynamic) {
+								Log.warn('Coping file to S3, coping to disk first, but there was no data, so no file stream $tempFileName');
+								return null;
+							}
+						});
+				}
+			})
+			.pipe(function(stream) {
+				if (stream != null) {
+					var promise = new DeferredPromise();
+					var params = {Bucket: _containerName, Key: path, Body: stream};
+					var eventDispatcher = _S3.upload(params, function(err, result) {
+						if (err != null) {
+							promise.boundPromise.reject(err);
+						} else {
+							promise.resolve(true);
+						}
+					});
+					return promise.boundPromise;
+				} else {
+					return Promise.promise(true);
+				}
+				// This can be integrated later
+				// eventDispatcher.on('httpUploadProgress', function(evt) {
+				// 	trace('Progress:', evt.loaded, '/', evt.total);
+				// });
+			})
+			.then(function(result) {
+				cleanup();
+				return result;
+			})
+			.errorPipe(function(err) {
+				cleanup();
+				return PromiseTools.error(err);
+			});
 	}
 
 	override public function copyFile(source :String, target :String) :Promise<Bool>
@@ -160,82 +344,97 @@ class ServiceStorageS3 extends ServiceStorageBase
 
 	override public function deleteFile(path :String) :Promise<Bool>
 	{
-		Assert.notNull(path);
-
-		var client = this.getClient();
-		return client.getContainer(this.getContainerName())
-			.pipe(function(container) {
-				return client.getFiles(container)
-					.then(function(files) {
-						return {
-							container: container,
-							files: files
-						};
-					});
-			})
-			.pipe(function(inputs) {
-				var files = inputs.files;
-				var file :File = files.find(function (File) {
-					return File.name == path;
+		path = getPath(path);
+		return initialized()
+			.pipe(function(_) {
+				var promise = new DeferredPromise();
+				var params = {Bucket: _containerName, Key: path};
+				_S3.deleteObject(params, function(err, result) {
+					if (err != null) {
+						promise.boundPromise.reject(err);
+					} else {
+						promise.resolve(true);
+					}
 				});
-
-				if (file == null) {
-					return Promise.promise(false);
-				}
-
-				return client.removeFile(inputs.container, file);
+				return promise.boundPromise;
 			});
 	}
 
 	override public function deleteDir(?path :String) :Promise<Bool>
 	{
-		if (path == null) {
-			Log.error('deleteDir called with no path; ServiceStorageS3 does nothing in this case.');
-			return Promise.promise(true);
-		}
-
-		var client = this.getClient();
-
-		return client.getContainer(this.getContainerName())
-			.pipe(function (container) {
-				return client.getFiles(container)
-				.then(function (files) {
-					return {
-						container: container,
-						files: files
-					}
-				});
-			})
-			.then(function (inputs) {
-				var promises = [];
-				inputs.files.iter(function (file :File) {
-					promises.push(client.removeFile(inputs.container, file));
-				});
-				return promises;
-			})
-			.pipe(function (promises) {
-				return Promise.whenAll(promises);
-			})
-			.then(function (_) {
-				return true;
+		return listDirS3(path)
+			.pipe(function(fileList) {
+				if (fileList.length > 0) {
+					var promise = new DeferredPromise();
+					var params = {Bucket: _containerName,
+						Delete: {
+							Objects:fileList.map(function(f) {
+								return {
+									Key:f
+								}
+							})
+						}
+					};
+					_S3.deleteObjects(params, function(err, result) {
+						if (err != null) {
+							promise.boundPromise.reject(err);
+						} else {
+							promise.resolve(true);
+						}
+					});
+					return promise.boundPromise;
+				} else {
+					return Promise.promise(true);
+				}
 			});
 	}
 
 	override public function listDir(?path :String) :Promise<Array<String>>
 	{
-		var client = this.getClient();
-		return client.getContainer(this.getContainerName())
-			.pipe(function(container) {
-				return client.getFiles(container);
-			})
-			.then(function(files :Array<File>) {
-				return files.map(function (File) {
-					if ((path != null) && (File.name.startsWith(path))){
-						return File.name;
+		path = getPath(path);
+		return listDirS3(path)
+			.then(function(files) {
+				return files.map(function(f) {
+					f = path != null ? f.substr(path.length) : f;
+					if (f.startsWith('/')) {
+						f = f.substr(1);
 					}
-
-					return File.name;
+					return f;
 				});
+			});
+	}
+
+	function listDirS3(?path :String) :Promise<Array<String>>
+	{
+		return initialized()
+			.pipe(function(_) {
+				var promise = new DeferredPromise();
+				var params = {Bucket: _containerName, Prefix: path, ContinuationToken:null};
+				var continuationToken :String = null;
+
+				var fileList = [];
+
+				var getNext = null;
+				getNext = function() {
+					_S3.listObjectsV2(params, function(err, result) {
+						if (err != null) {
+							promise.boundPromise.reject(err);
+						} else {
+							var arr :Array<{Key:String}> = result.Contents;
+							for (f in arr) {
+								fileList.push(f.Key);
+							}
+							if (result.NextContinuationToken != null && result.IsTruncated) {
+								params.ContinuationToken = result.NextContinuationToken;
+								getNext();
+							} else {
+								promise.resolve(fileList);
+							}
+						}
+					});
+				}
+				getNext();
+				return promise.boundPromise;
 			});
 	}
 
@@ -247,70 +446,59 @@ class ServiceStorageS3 extends ServiceStorageBase
 
 	override public function setRootPath(path :String) :ServiceStorage
 	{
-		if (! endingSlash.match(path)) {
-			path = path + '/';
-		}
-
-		_rootPath = extraSlash.replace(path, '/');
+		super.setRootPath(path);
+		_rootPath = removePrecedingSlash(_rootPath);
 		return this;
-	}
-
-	override public function getRootPath() :String
-	{
-		return _rootPath;
 	}
 
 	override public function appendToRootPath(path :String) :ServiceStorage
 	{
-		if (! endingSlash.match(path)) {
-			path = path + '/';
-		}
-		_rootPath = extraSlash.replace(_rootPath + path, '/');
-		return this;
+		var copy = clone();
+		path = path.replace('//', '/');
+		copy.setRootPath(getPath(path));
+		return copy;
 	}
 
 	override public function getPath(p :String) :String
 	{
-		if (p != null && p.startsWith('/')) {
-			return precedingSlash.replace(p, '');
-		} else {
-			return convertPath(p);
+		if (p != null && _httpAccessUrl != null && p.startsWith(_httpAccessUrl)) {
+			p = p.substr(_httpAccessUrl.length);
 		}
+		var path = super.getPath(p);
+		return removePrecedingSlash(path);
+// 		// AWS S3 allows path-like object names so this functionality isn't necessary
+// 		// convert a path to a container replacing / with -
+//		result = splitRegEx.replace(result, replaceChar);
+// 		return result;
 	}
 
 	override public function getExternalUrl(?path :String) :String
 	{
-		var baseUrl = _config.httpAccessUrl;
-		var bucket = _defaultContainerName;
-		var url = baseUrl + '/' + bucket + this.getRootPath();
-		if (!url.endsWith('/')) {
-			url = url + '/';
+		if (path != null && path.startsWith('http')) {
+			return path;
 		}
-		if (path != null) {
-			url = url + path;
+		path = getPath(path);
+		if (_httpAccessUrl != null) {
+			return _httpAccessUrl + path;
+		} else {
+			return path;
 		}
-		return url;
 	}
 
-	// stronger assertions than StorageTools.getConfigFromServiceConfiguration
-	public static function getS3ConfigFromServiceConfiguration(input :ServiceConfiguration) :StorageDefinition
+	static function isBucket(s3 :AWSS3, bucket :String) :Promise<Bool>
 	{
-		Assert.notNull(input.server);
+		var promise = new DeferredPromise();
 
-		var storageConfig = input.server.storage;
-		Assert.notNull(storageConfig);
-		Assert.notNull(storageConfig.type);
-		Assert.notNull(storageConfig.rootPath);
-		Assert.notNull(storageConfig.defaultContainer);
-		Assert.notNull(storageConfig.httpAccessUrl);
-		Assert.notNull(storageConfig.credentials);
 
-		return {
-			type: cast storageConfig.type,
-			storageClient: PkgCloud.storage.createClient(storageConfig.credentials),
-			rootPath: storageConfig.rootPath,
-			defaultContainer: storageConfig.defaultContainer,
-			httpAccessUrl: storageConfig.httpAccessUrl
-		};
+		return promise.boundPromise;
+	}
+
+	static function removePrecedingSlash(s :String) :String
+	{
+		if (s.startsWith('/')) {
+			return removePrecedingSlash(s.substring(1));
+		} else {
+			return s;
+		}
 	}
 }

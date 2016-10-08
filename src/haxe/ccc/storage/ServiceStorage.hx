@@ -5,6 +5,13 @@ import promhx.Promise;
 import js.node.stream.Readable;
 import js.node.stream.Writable;
 
+typedef ServiceStorageTestResult = {
+	var success:Bool;
+	@:optional var read :Bool;
+	@:optional var write :Bool;
+	@:optional var error :Dynamic;
+}
+
 interface ServiceStorage
 {
 	var type (get, never):StorageSourceType;
@@ -13,7 +20,7 @@ interface ServiceStorage
 	/* Returns a tgz stream */
 	function readDir(?uri :String) :Promise<IReadable>;
 	function writeFile(uri :String, data :IReadable) :Promise<Bool>;
-	function getFileWritable(uri :String) :Promise<IWritable>;
+	// function getFileWritable(uri :String) :Promise<IWritable>;
 	function deleteFile(uri :String) :Promise<Bool>;
 	function deleteDir(?uri :String) :Promise<Bool>;
 	function listDir(?uri :String) :Promise<Array<String>>;
@@ -29,6 +36,8 @@ interface ServiceStorage
 	 * @return [description]
 	 */
 	function getExternalUrl(?path :String) :String;
+
+	function test() :Promise<ServiceStorageTestResult>;
 
 #if debug
 	var _rootPath :String;

@@ -6,14 +6,12 @@ import js.Node;
 import js.node.Path;
 import js.node.Fs;
 
-import js.npm.Docker;
+import js.npm.docker.Docker;
 import js.npm.PkgCloud;
 import js.npm.RedisClient;
-import js.npm.Ssh;
+import js.npm.ssh2.Ssh;
 
 import ccc.compute.InstancePool;
-import ccc.compute.Definitions;
-import ccc.compute.Definitions.Constants.*;
 import ccc.compute.execution.Job;
 
 import promhx.Promise;
@@ -32,44 +30,42 @@ import t9.abstracts.net.*;
 using promhx.PromiseTools;
 using Lambda;
 using StringTools;
+using t9.util.ColorTraces;
 
-typedef ServiceConfigurationWorkerProviderPkgCloud = {>ServiceConfigurationWorkerProvider,
-	var credentials :ClientOptionsAmazon;
-	var worker :WorkerOptionsAmazon;
-	var server :WorkerOptionsAmazon;
-}
-
-typedef WorkerOptionsAmazon = {>ServiceConfigurationWorkerProvider,
-	@:optional var name :String;
-	@:optional var Tags :Array<Dynamic<String>>;
+typedef InstanceOptionsAmazon = {
 	var InstanceType :String;
 	var ImageId :String;
 	var KeyName :String;
 	var Key :String;
 	@:optional var SecurityGroupId :String;
 	@:optional var SubnetId :String;
-	@:optional var usePublicIp :Bool;
+	@:optional var MinCount :Int;
+	@:optional var MaxCount :Int;
 }
 
 class WorkerProviderPkgCloud extends WorkerProviderBase
 {
-	public static function getPublicHostName(config :ServiceConfigurationWorkerProviderPkgCloud) :Promise<HostName>
+	public static function getPublicHostName(config :ServiceConfigurationWorkerProvider) :Promise<HostName>
 	{
-		return switch(config.credentials.provider) {
+		var credentials :ClientOptionsAmazon = config.credentials;
+		var providerType :ProviderType = credentials.provider;
+		return switch(providerType) {
 			case amazon:
 				return getAWSPublicHostName();
-			case google:
-				throw 'Not yet implemented: google ip handling';
+			default:
+				return PromiseTools.error('getPrivateHostName() No other cloud providers implemented, do not know how to get private host name');
 		}
 	}
 
-	public static function getPrivateHostName(config :ServiceConfigurationWorkerProviderPkgCloud) :Promise<HostName>
+	public static function getPrivateHostName(config :ServiceConfigurationWorkerProvider) :Promise<HostName>
 	{
-		return switch(config.credentials.provider) {
+		var credentials :ClientOptionsAmazon = config.credentials;
+		var providerType :ProviderType = credentials.provider;
+		return switch(providerType) {
 			case amazon:
 				return getAWSPrivateHostName();
-			case google:
-				throw 'Not yet implemented: google ip handling';
+			default:
+				return PromiseTools.error('getPrivateHostName() No other cloud providers implemented, do not know how to get private host name');
 		}
 	}
 
@@ -99,6 +95,7 @@ class WorkerProviderPkgCloud extends WorkerProviderBase
 				return getPrivateHostName(cast _config)
 					.then(function(hostname) {
 						Constants.SERVER_HOSTNAME_PRIVATE = hostname;
+						Constants.REGISTRY = new Host(new HostName(Constants.SERVER_HOSTNAME_PRIVATE), new Port(REGISTRY_DEFAULT_PORT));
 						Log.debug('SERVER_HOSTNAME_PRIVATE=${Constants.SERVER_HOSTNAME_PRIVATE}');
 						return true;
 					});
@@ -134,6 +131,7 @@ class WorkerProviderPkgCloud extends WorkerProviderBase
 
 	override public function destroyInstance(instanceId :MachineId) :Promise<Bool>
 	{
+		Assert.notNull(instanceId);
 		return super.destroyInstance(instanceId)
 			.pipe(function(_) {
 				if (_compute != null) {
@@ -156,12 +154,11 @@ class WorkerProviderPkgCloud extends WorkerProviderBase
 	function initClient()
 	{
 		if (getConfig() != null && _compute == null) {
-			this.id = getConfig().credentials.provider + '';
-			log.info({log:'Initializing provider=$id', provider:id});
+			this.id = ServiceWorkerProviderType.pkgcloud;
+			log.info({log:'Initializing provider id=$id', provider:id});
 			Assert.that(!PROVIDERS.exists(this.id));
 			PROVIDERS.set(this.id, this);
 			_compute = cast PkgCloud.compute.createClient(getConfig().credentials);
-			var type :ProviderType = cast id;
 		}
 	}
 
@@ -238,7 +235,7 @@ class WorkerProviderPkgCloud extends WorkerProviderBase
 				 * So we get the remainder of the hour for this instance
 				 * and shutdown just before the hour elapses.
 				 */
-				log.info({f:'getShutdownDelay', workerId:workerId, log:'getServer'});
+				log.debug({f:'getShutdownDelay', workerId:workerId, log:'getServer'});
 				return getServer(workerId)
 					.then(function(worker) {
 						/*
@@ -246,23 +243,25 @@ class WorkerProviderPkgCloud extends WorkerProviderBase
 						 *	value is unlikely to change in the near future, lets
 						 *	hard code it to avoid billing mistakes.
 						 */
-						var billingIncrement = _config.billingIncrement;
-						var awsServer :PkgCloudServerAws = cast worker;
-						var launchTime = awsServer.launchTime;
-						var launchTimeSince1970Ms :Milliseconds = untyped __js__('new Date(launchTime).getTime()');
-						var launchTimeSince1970 = new TimeStamp(launchTimeSince1970Ms);
-						var now = TimeStamp.now();
-						var minutesSinceLaunch = (now - launchTimeSince1970).toMinutes();
-						var remainingMinutesTheIncrement = minutesSinceLaunch % billingIncrement;
-						var delay = billingIncrement - remainingMinutesTheIncrement;
-						delay = delay - new Minutes(1);
-						if (delay < new Minutes(0)) {
-							delay = new Minutes(0);
+						var billingIncrement :Minutes = _config.billingIncrement;
+						if (billingIncrement == null || billingIncrement.toFloat() == 0) {
+							return new Minutes(0);
+						} else {
+							var awsServer :PkgCloudServerAws = cast worker;
+							var launchTime = awsServer.launchTime;
+							var launchTimeSince1970Ms :Milliseconds = untyped __js__('new Date({0}).getTime()', launchTime);
+							var launchTimeSince1970 = new TimeStamp(launchTimeSince1970Ms);
+							var now = TimeStamp.now();
+							var minutesSinceLaunch = (now - launchTimeSince1970).toMinutes();
+							var remainingMinutesTheIncrement = minutesSinceLaunch % billingIncrement;
+							var delay = billingIncrement - remainingMinutesTheIncrement;
+							if (delay < new Minutes(0)) {
+								delay = new Minutes(0);
+							}
+							log.debug({f:'getShutdownDelay', billingIncrement:billingIncrement, workerId:workerId, log:'getServer', delay:delay, launchTime:launchTime, launchTimeSince1970Ms:launchTimeSince1970Ms, launchTimeSince1970:launchTimeSince1970, now:now, minutesSinceLaunch:minutesSinceLaunch, remainingMinutesTheIncrement:remainingMinutesTheIncrement});
+							return delay;
 						}
-						return delay;
 					});
-			case google:
-				return super.getShutdownDelay(workerId);
 			default:
 				return super.getShutdownDelay(workerId);
 		};
@@ -273,17 +272,6 @@ class WorkerProviderPkgCloud extends WorkerProviderBase
 	{
 		log.info('provider=$id worker=$workerId destroying destroying instance');
 		return destroyInstance(workerId);
-		
-		// if (_compute != null) {
-		// 	return _compute.destroyServer(workerId)
-		// 		.thenTrue()
-		// 		.errorPipe(function(err) {
-		// 			Log.error('shutdownWorker err (This might be fine)=$err');
-		// 			return Promise.promise(true);
-		// 		});
-		// } else {
-		// 	return Promise.promise(true);
-		// }
 	}
 
 	override public function shutdownAllWorkers() :Promise<Bool>
@@ -302,7 +290,11 @@ class WorkerProviderPkgCloud extends WorkerProviderBase
 		return _ready
 			.pipe(function(_) {
 				var config = getConfig();
-				return createInstance(config.credentials, config.worker, true);
+				if (config.machines[MachineType.worker] == null) {
+					return PromiseTools.error('No machine defined as "${MachineType.worker}" in providers.machines in configuration');
+				} else {
+					return createInstance(getConfig(), MachineType.worker);
+				}
 			});
 	}
 
@@ -311,7 +303,18 @@ class WorkerProviderPkgCloud extends WorkerProviderBase
 		return _ready
 			.pipe(function(_) {
 				var config = getConfig();
-				return createInstance(config.credentials, config.server, false);
+				var type = MachineType.server;
+				if (config.machines[MachineType.server] == null) {
+					if (config.machines[MachineType.worker] == null) {
+						return PromiseTools.error('No machine defined as "${MachineType.server}" or "${MachineType.worker}" in providers.machines in configuration');
+					} else {
+						trace("    - using the machine type 'worker' specified in your configuration".yellow());
+						return createInstance(config, MachineType.worker);
+					}
+				} else {
+					trace("    - using the machine type 'server' specified in your configuration".yellow());
+					return createInstance(config, MachineType.server);
+				}
 			});
 	}
 
@@ -368,7 +371,18 @@ class WorkerProviderPkgCloud extends WorkerProviderBase
 	{
 		return RequestPromises.get('http://169.254.169.254/latest/meta-data/public-hostname')
 			.then(function(s) {
-				return new HostName(s.trim());
+				return s != null ? new HostName(s.trim()) : null;
+			});
+	}
+
+	static function getAWSInstanceId() :Promise<MachineId>
+	{
+		return RequestPromises.get('http://169.254.169.254/latest/meta-data/instance-id')
+			.then(function(s) {
+				return new MachineId(s.trim());
+			})
+			.errorPipe(function(err) {
+				return Promise.promise(Sys.getEnv('USER'));
 			});
 	}
 
@@ -378,21 +392,9 @@ class WorkerProviderPkgCloud extends WorkerProviderBase
 	}
 
 	/** Just does a cast */
-	inline function getConfig() :ServiceConfigurationWorkerProviderPkgCloud
+	inline function getConfig() :ServiceConfigurationWorkerProvider
 	{
 		return cast _config;
-	}
-
-	/**
-	 * When we need to log the config but don't want to put the
-	 * private key in the logs
-	 */
-	static function getLogSafeConfig(config :Dynamic)
-	{
-		var copy :ServiceConfigurationWorkerProviderPkgCloud = Reflect.copy(config);
-		copy.worker = Reflect.copy(copy.worker);
-		Reflect.deleteField(copy.worker, 'Key');
-		return copy;
 	}
 
 	static function getIpFromServer(server :PkgCloudServer, ?usePublic :Bool = false) :String
@@ -406,141 +408,151 @@ class WorkerProviderPkgCloud extends WorkerProviderBase
 		}
 	}
 
-	public static function createInstance(credentials :ClientOptionsAmazon, instanceParameters :WorkerOptionsAmazon, isWorker :Bool, ?log :AbstractLogger) :Promise<WorkerDefinition>
+	public static function createInstance(config :ServiceConfigurationWorkerProvider, machineType :String, ?log :AbstractLogger) :Promise<WorkerDefinition>
 	{
-		return createPkgCloudInstance(credentials, instanceParameters, isWorker, log)
-			.then(function(server) {
-				var usePublicIp = !isWorker || instanceParameters.usePublicIp;
-				var host = getIpFromServer(server, usePublicIp);
-				var hostPublic = getIpFromServer(server, true);
-				var hostPrivate = getIpFromServer(server, false);
+		var provider :CloudProvider = config;
+		return createPkgCloudInstance(config, machineType, log)
+			.then(function(serverBlob) {
+				var server = serverBlob.server;
+				var ssh = serverBlob.ssh;
+				var privateIp = serverBlob.privateIp;
 				var workerDef :WorkerDefinition = {
 					id: server.id,
-					hostPublic: new HostName(hostPublic),
-					hostPrivate: new HostName(hostPrivate),
-					ssh: {
-						host: host,
-						port: 22,
-						username: 'core',
-						privateKey: instanceParameters.Key
-					},
+					hostPublic: new HostName(ssh.host),
+					hostPrivate: new HostName(privateIp),
+					ssh: ssh,
 					docker: {
-						host: host,
+						host: privateIp,
 						port: 2375,
 						protocol: 'http'
 					}
 				};
+				traceGreen('    - created remote server ${server.id} at ${ssh.host}');
 				return workerDef;
 			});
 	}
 
-	public static function createPkgCloudInstance(credentials :ClientOptionsAmazon, instanceParameters :WorkerOptionsAmazon, isWorker :Bool, ?log :AbstractLogger) :Promise<PkgCloudServer>
+	public static function destroyCloudInstance(config :ServiceConfigurationWorkerProvider, machineId :ccc.compute.Definitions.MachineId) :Promise<Bool>
 	{
-		log = Logger.ensureLog(log, {f:'createPkgCloudInstance', isWorker:isWorker});
-		var optionsAmazon :WorkerOptionsAmazon = Reflect.copy(instanceParameters);
-		var optionsAmazonForLogging :WorkerOptionsAmazon = Reflect.copy(instanceParameters);
-		Reflect.deleteField(optionsAmazonForLogging, 'Key');
-		log.debug({optionsAmazon:optionsAmazonForLogging});
-		var isPublicIp = optionsAmazon.usePublicIp || !isWorker;
-		var instanceType = isWorker ? 'worker' : 'server';
+		return destroyPkgCloudInstance(config.credentials, machineId);
+	}
+
+	public static function destroyPkgCloudInstance(credentials :ProviderCredentials, machineId :String) :Promise<Bool>
+	{
 		var client :ComputeClientP = cast PkgCloud.compute.createClient(credentials);
-		Assert.notNull(client, 'createPkgCloudInstance client==null');
+		return client.destroyServer(machineId)
+			.thenTrue();
+	}
+
+	public static function createPkgCloudInstance(config :ServiceConfigurationWorkerProvider, machineType :String, ?log :AbstractLogger) :Promise<{server:PkgCloudServer,ssh:ConnectOptions, privateIp: String}>
+	{
+		log = Logger.ensureLog(log, {f:'createPkgCloudInstance'});
+
+		var credentials :ClientOptionsAmazon = cast config.credentials;
+		var provider :CloudProvider = config;
+		//This call merges the default options and tags into the instance options and tags.
+		var instanceDefinition :ProviderInstanceDefinition = provider.getMachineDefinition(machineType);// config.machines[machineType];
+		if (instanceDefinition == null) {
+			return PromiseTools.error('createPkgCloudInstance missing machine configuration for $machineType');
+		}
+		var isPublicIp = instanceDefinition.public_ip;//instanceDefinition.public_ip == null ? false : instanceDefinition.public_ip;
+		var client :ComputeClientP = cast PkgCloud.compute.createClient(credentials);
 		var type :ProviderType = credentials.provider;
 		log = log.child({'type':type});
-		log.debug('creating new $instanceType');
+		log.debug('creating new $machineType');
 		return Promise.promise(true)
 			.pipe(function(_) {
-				switch(type) {
+				switch(config.type) {
 					case amazon:
-						log.debug('creating aws instance');
-						/*
-						 * Using the amazon pkgcloud API directly is not sufficient for our purposes,
-						 * since some options are not exposed, e.g. specifying the SubnetId.
-						 * So instead, we grab the EC2 object from the client object, and interact
-						 * directly with the AWS-SDK.
-						 */
-						Reflect.deleteField(optionsAmazon, 'Key');
-						//Do some raw stuff via the direct AWS object
-						//http://docs.aws.amazon.com/AWSJavaScriptSDK/latest/AWS/EC2.html#runInstances-property
-						var ec2 :{runInstances:Dynamic->(Dynamic->Dynamic->Void)->Void, createTags:Dynamic->(Dynamic->Void)->Void} = Reflect.field(client, 'ec2');
-						// log.trace('client=${client}');
-						Assert.notNull(ec2, 'Missing ec2 field from pkgcloud client');
-						var meta = {name: optionsAmazon.name};
-						var options = {
-							UserData: null,
-							MinCount: 1,
-							MaxCount: 1,
-							ImageId: optionsAmazon.ImageId,
-							InstanceType: optionsAmazon.InstanceType,
-							KeyName: optionsAmazon.KeyName,
-						};
-						//http://docs.aws.amazon.com/AWSJavaScriptSDK/latest/AWS/EC2.html#runInstances-property
-						if (isPublicIp && Reflect.hasField(optionsAmazon, 'SubnetId')) {
-							Reflect.setField(options, 'NetworkInterfaces', [{'AssociatePublicIpAddress':true, SubnetId:optionsAmazon.SubnetId, DeviceIndex:0}]);
-						} else if (Reflect.hasField(optionsAmazon, 'SubnetId')) {
-							Reflect.setField(options, 'SubnetId', optionsAmazon.SubnetId);
-						}
+						return getAWSInstanceId()
+							.pipe(function(serverInstanceId) {
 
-						if (optionsAmazon.SecurityGroupId != null) {
-							Reflect.setField(options, 'SecurityGroupIds', [optionsAmazon.SecurityGroupId]);
-						}
-						log.debug({message:'AWS $instanceType', options:options});
-						var promise = new DeferredPromise();
-						ec2.runInstances(options, function(err, data :{Instances:Array<Dynamic>}) {
-							log.trace('in runInstances!!!!');
-							if (err != null) {
-								log.error({log:'runInstances', error:err});
-								promise.boundPromise.reject(err);
-								return;
-							}
-							// log.trace({message:'runInstances', data:data});
-							var instanceId = data.Instances[0].InstanceId;
-							var tags = optionsAmazon.Tags == null ? [] : optionsAmazon.Tags;
-
-							function getServerAndResolve() {
-								client.getServer(instanceId)
-									.then(function(server) {
-										promise.resolve(server);
-									});
-							}
-							// Add tags to the instance
-							if (tags.length == 0) {
-								getServerAndResolve();
-							} else {
-								var tagParams = {Resources: [instanceId], Tags: tags};
-								ec2.createTags(tagParams, function(err) {
-									log.trace('Tagging $instanceType $instanceId with $tags '+ (err != null? "failure" : "success"));
+								var instanceOpts :InstanceOptionsAmazon = cast instanceDefinition.options;
+								log.debug('creating aws instance');
+								/*
+								 * Using the amazon pkgcloud API directly is not sufficient for our purposes,
+								 * since some options are not exposed, e.g. specifying the SubnetId.
+								 * So instead, we grab the EC2 object from the client object, and interact
+								 * directly with the AWS-SDK.
+								 */
+								//Do some raw stuff via the direct AWS object
+								//http://docs.aws.amazon.com/AWSJavaScriptSDK/latest/AWS/EC2.html#runInstances-property
+								var ec2 :{runInstances:Dynamic->(Dynamic->Dynamic->Void)->Void, createTags:Dynamic->(Dynamic->Void)->Void} = Reflect.field(client, 'ec2');
+								Assert.notNull(ec2, 'Missing ec2 field from pkgcloud client');
+								instanceOpts.MinCount = 1;
+								instanceOpts.MaxCount = 1;
+								log.debug({message:'AWS $machineType', options:LogTools.removePrivateKeys(instanceOpts)});
+								var promise = new DeferredPromise();
+								js.Node.process.stdout.write('    - creating instance\n'.yellow());
+								ec2.runInstances(instanceOpts, function(err, data :{Instances:Array<Dynamic>}) {
 									if (err != null) {
-										log.error({log:'createTags', error:err});
+										log.error({log:'runInstances', error:err});
+										promise.boundPromise.reject(err);
+										return;
 									}
-									log.debug({log:'done tagging, client.getServer'});
-									getServerAndResolve();
+									// log.trace({message:'runInstances', data:data});
+									var instanceId = data.Instances[0].InstanceId;
+									js.Node.process.stdout.write('        - $instanceId created\n'.green());
+
+									//Get tags, merge default and instance specific
+									var tags = [];
+									tags.push({Key:INSTANCE_TAG_TYPE_KEY, Value:machineType});
+									tags.push({Key:INSTANCE_TAG_OWNER_KEY, Value:serverInstanceId});
+
+									//Custom tags
+									for (tagName in instanceDefinition.tags.keys()) {
+										tags.push({Key:tagName, Value:instanceDefinition.tags[tagName]});
+									}
+
+									//Create an object for better logging (avoiding the Key:Value verbosity)
+									var tagsForLogging :DynamicAccess<String> = {};
+									for (tag in tags) {
+										tagsForLogging[tag.Key] = tag.Value;
+									}
+
+									function getServerAndResolve() {
+										client.getServer(instanceId)
+											.then(function(server) {
+												promise.resolve(server);
+											});
+									}
+									// Add tags to the instance
+									js.Node.process.stdout.write('    - tagging $instanceId with ${Json.stringify(tagsForLogging)}\n'.yellow());
+									var tagParams = {Resources: [instanceId], Tags: tags};
+									ec2.createTags(tagParams, function(err) {
+										js.Node.process.stdout.write('        - successfully tagged\n'.green());
+										log.trace('Tagging $machineType $instanceId with $tags '+ (err != null? "failure" : "success"));
+										if (err != null) {
+											js.Node.process.stdout.write('failed to tag instance, error=$err'.red());
+											log.error({log:'createTags', error:err});
+										}
+										log.debug({log:'done tagging, client.getServer'});
+										getServerAndResolve();
+									});
 								});
-							}
-						});
-						return promise.boundPromise;
-					default:
-						log.error({log:'Untested PkgCloud provider'});
-						return client.createServer(Reflect.copy(instanceParameters));
+								return promise.boundPromise;
+							});
 				}
 			})
 			.pipe(function(server) {
+				Node.process.stdout.write('    - polling ${server.id} via provider API'.yellow());
 				var promise = new DeferredPromise();
 				//Poll every interval until the status is running
 				var f = null;
 				var status = null;
 				f = function() {
 					log.info({f:'createPkgCloudInstance', instance_id:server.id, message:'getServer'});
+					Node.process.stdout.write('.'.yellow());
 					client.getServer(server.id)
 						.then(function(server) {
 							if (server.status != status) {
-								log.debug({log:'provider=$type creating new $instanceType ${server.id} ${server.status}'});
+								log.debug({log:'provider=$type creating new $machineType ${server.id} ${server.status}'});
 								status = server.status;
 							}
-							log.trace({server_status:server.status, addresses:server.addresses});
-							var optionsAmazon :WorkerOptionsAmazon = Reflect.copy(instanceParameters);
+							// log.trace({server_status:server.status, addresses:server.addresses});
 							var host = getIpFromServer(server, isPublicIp);
 							if (server.status == PkgCloudComputeStatus.running && host != null && host != '') {
+								Node.process.stdout.write('OK\n'.green());
 								promise.resolve(server);
 							} else {
 								haxe.Timer.delay(f, 4000);//4 seconds
@@ -551,28 +563,34 @@ class WorkerProviderPkgCloud extends WorkerProviderBase
 				return promise.boundPromise;
 			})
 			.pipe(function(server) {
-				var optionsAmazon :WorkerOptionsAmazon = instanceParameters;
-				var host = getIpFromServer(server, isPublicIp);
+				var host = getIpFromServer(server, isPublicIp || machineType == MachineType.server);
+				var privateIp = getIpFromServer(server, false);
 				if (host == null) {
 					throw 'Could not find public IP in server=$server';
 				}
+
+				Assert.notNull(provider.getMachineKey(machineType), 'Cannot find ssh key in $provider for machine type $machineType');
 				var sshOptions :ConnectOptions = {
 					host: host,
 					port: 22,
 					username: 'core',
-					privateKey: optionsAmazon.Key
+					privateKey: provider.getMachineKey(machineType)
 				}
 
-				Log.info('provider=$type new $instanceType ${server.id} set up instance');
-				return WorkerProviderTools.pollInstanceUntilSshReady(sshOptions)
+				Log.info('provider=$type new $machineType ${server.id} set up instance host=$host');
+				Node.process.stdout.write('    - polling ${server.id} at host=${sshOptions.host} username=${sshOptions.username} via SSH'.yellow());
+				return WorkerProviderTools.pollInstanceUntilSshReady(sshOptions, function() Node.process.stdout.write('.'.yellow()))
 					.pipe(function(_) {
+						Node.process.stdout.write('OK\n'.green());
 						log.info('SSH connection to instance established!');
-						log.info('provider=$type new $instanceType ${server.id} set up instance');
+						log.info('provider=$type new $machineType ${server.id} set up instance');
 						//Update CoreOs to allow docker access
 						//AWS specific
+						Node.process.stdout.write('    - setting up CoreOS\n'.yellow());
 						return WorkerProviderTools.setupCoreOS(sshOptions)
 							.then(function(_) {
-								return server;
+								Node.process.stdout.write('      - OK\n'.green());
+								return {server:server, ssh:sshOptions, privateIp:privateIp};
 							});
 					});
 			});

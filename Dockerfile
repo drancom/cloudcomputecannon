@@ -9,7 +9,7 @@ ENV NEKOPATH /root/neko/
 ENV LD_LIBRARY_PATH /root/neko/
 ENV PATH /root/neko/:$PATH
 
-ENV HAXE_DOWNLOAD_URL http://haxe.org/website-content/downloads/3.2.1/downloads/haxe-3.2.1-linux64.tar.gz
+ENV HAXE_DOWNLOAD_URL http://haxe.org/website-content/downloads/3.3.0-rc.1/downloads/haxe-3.3.0-rc.1-linux64.tar.gz
 
 # Dependencies
 RUN apt-get update && \
@@ -22,20 +22,16 @@ RUN apt-get update && \
 	mkdir /root/neko && \
 	wget -O - http://nekovm.org/_media/neko-2.0.0-linux64.tar.gz | tar xzf - --strip=1 -C "/root/neko"
 
-RUN npm install -g forever supervisor bunyan
-
 ENV APP /app
 RUN mkdir -p $APP
 WORKDIR $APP
 
 RUN haxelib newrepo
 
-ENV PORT 9000
-EXPOSE $PORT
-
 #Only install npm packages if the package.json changes
 ADD ./package.json $APP/package.json
 RUN npm install
+RUN npm install -g forever nodemon bunyan
 
 #Only install haxe packages if the package.json changes
 ADD ./etc/hxml/base.hxml $APP/etc/hxml/base.hxml
@@ -46,6 +42,12 @@ COPY ./ $APP/
 
 RUN	haxe etc/hxml/build-all.hxml
 
-CMD haxe etc/hxml/server-run.hxml
+ENV PORT 9000
+EXPOSE $PORT
+EXPOSE 9001
+EXPOSE 9002
+
+#Do not watch the entire tree, just that file
+CMD forever --watchDirectory build build/server/cloud-compute-cannon-server.js
 
 

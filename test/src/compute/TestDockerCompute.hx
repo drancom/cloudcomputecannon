@@ -7,13 +7,12 @@ import js.node.Http;
 import js.node.Path;
 import js.node.Fs;
 import js.node.stream.Readable;
-import js.npm.Docker;
-import js.npm.FsExtended;
+import js.npm.docker.Docker;
+import js.npm.fsextended.FsExtended;
 import js.npm.FsPromises;
 import js.npm.RedisClient;
-import js.npm.HttpPromises;
-import js.npm.Ssh;
-import js.npm.TarFs;
+import js.npm.ssh2.Ssh;
+import js.npm.tarfs.TarFs;
 
 import promhx.Promise;
 import promhx.Deferred;
@@ -21,6 +20,7 @@ import promhx.Stream;
 import promhx.StreamPromises;
 import promhx.DockerPromises;
 import promhx.CallbackPromise;
+import promhx.RequestPromises;
 import promhx.deferred.DeferredPromise;
 
 import ccc.storage.ServiceStorage;
@@ -30,8 +30,6 @@ import ccc.storage.StorageSourceType;
 import ccc.compute.ComputeQueue;
 import ccc.compute.ServiceBatchCompute;
 import ccc.compute.ComputeTools;
-import ccc.compute.Definitions;
-import ccc.compute.Definitions.Constants.*;
 import ccc.compute.execution.BatchComputeDocker;
 import ccc.compute.execution.DockerJobTools;
 import ccc.compute.workers.WorkerProviderBoot2Docker;
@@ -58,21 +56,21 @@ class TestDockerCompute extends TestComputeBase
 
 	override public function setup() :Null<Promise<Bool>>
 	{
-		_worker = WorkerProviderBoot2Docker.getLocalDockerWorker();
-		return super.setup();
-	}
-
-	@timeout(500)
-	public function testSshConnectivity()
-	{
-		var workerDef = _worker;
-		return Promise.promise(true)
+		return super.setup()
 			.pipe(function(_) {
-				return SshTools.execute(workerDef.ssh, 'echo "Hello"');
-			})
-			.then(function(result) {
-				assertEquals('Hello', result.stdout.trim());
-				return true;
+				var config :ServiceConfigurationWorkerProvider = {
+					type: ServiceWorkerProviderType.boot2docker,
+					maxWorkers: 1,
+					minWorkers: 0,
+					priority: 1,
+					billingIncrement: 0
+				};
+				var localProvider = new WorkerProviderBoot2Docker(config);
+				_fs = ServiceStorageLocalFileSystem.getService(localProvider._localJobData);
+				_workerProvider = localProvider;
+				_worker = WorkerProviderBoot2Docker.getLocalDockerWorker();
+				_injector.injectInto(_workerProvider);
+				return _workerProvider.ready;
 			});
 	}
 
@@ -138,7 +136,7 @@ class TestDockerCompute extends TestComputeBase
 	}
 
 	@timeout(1000)
-	public function testDockerCopyInputsSftp()
+	public function UNSURE_SINCE_NO_MORE_LOCAL_SFTP_testDockerCopyInputsSftp()
 	{
 		var workerDef = _worker;
 		var dateString = TestTools.getDateString();
@@ -157,7 +155,7 @@ class TestDockerCompute extends TestComputeBase
 		}
 
 		var source = StorageTools.getStorage({type:StorageSourceType.Local, rootPath:sourceDir});
-		var dest = StorageTools.getStorage({type:StorageSourceType.Sftp, rootPath:destDir, sshConfig:workerDef.ssh});
+		var dest = StorageTools.getStorage({type:StorageSourceType.Sftp, rootPath:destDir, credentials:workerDef.ssh});
 
 		return DockerJobTools.copyInternal(source, dest)
 			.pipe(function(_) {
@@ -199,7 +197,7 @@ class TestDockerCompute extends TestComputeBase
 	{
 		var workerDef = _worker;
 
-		var tarStream = js.npm.TarFs.pack('test/res/testDockerImage1');
+		var tarStream = js.npm.tarfs.TarFs.pack('test/res/testDockerImage1');
 
 		var workerDef = _worker;
 		var ssh;
@@ -236,7 +234,6 @@ class TestDockerCompute extends TestComputeBase
 							deferred.boundPromise.reject(err);
 							return;
 						}
-						untyped __js__('container.modem.demuxStream(stream, process.stdout, process.stdout)');
 						container.start(function(err, data) {
 							if (err != null) {
 								deferred.boundPromise.reject(err);
@@ -245,6 +242,9 @@ class TestDockerCompute extends TestComputeBase
 						});
 						stream.once('end', function() {
 							deferred.resolve(true);
+						});
+						stream.on('data', function(data) {
+							Log.trace(data);
 						});
 					});
 				});
@@ -261,7 +261,6 @@ class TestDockerCompute extends TestComputeBase
 		var sourceDockerContext = '$exampleBaseDir/dockerContext/';
 		var inputDir = '$exampleBaseDir/inputs';
 		var outputDir = 'tmp/testCompleteDockerJobRun/$dateString';
-		var workerBaseDir = '/tmp/testCompleteDockerJobRun/$dateString';
 
 		var jobId :JobId = 'jobid1';
 		var computeJobId :ComputeJobId = 'computeidjob1';
@@ -269,8 +268,9 @@ class TestDockerCompute extends TestComputeBase
 		var worker = WorkerProviderBoot2Docker.getLocalDockerWorker();
 
 		var jobFsPath = 'tmp/testCompleteDockerJobRun/$dateString';
-		var fs = new ServiceStorageLocalFileSystem().setRootPath(jobFsPath);
-		var workerStorage = ServiceStorageLocalFileSystem.getService('$jobFsPath/workerStorage');
+
+		var fs = ServiceStorageLocalFileSystem.getService().appendToRootPath(jobFsPath);
+		var workerStorage = _fs.appendToRootPath(jobFsPath);
 
 		var redis :RedisClient = _injector.getValue(js.npm.RedisClient);
 
@@ -292,18 +292,20 @@ class TestDockerCompute extends TestComputeBase
 
 		return Promise.promise(true)
 			.pipe(function(_) {
-				return DockerJobTools.deleteWorkerInputs(job)
-					.pipe(function(_) {
-						return DockerJobTools.deleteWorkerOutputs(job);
-					});
+				return workerStorage.deleteDir();
 			})
 			.pipe(function(_) {
 				//Make sure to put the inputs in the properly defined job path
 				//TODO: this needs to be better documented or automated.
 				var fsInputs = new ServiceStorageLocalFileSystem().setRootPath(exampleBaseDir + '/inputs');
-				var fsExampleInputs :ServiceStorage = new ServiceStorageLocalFileSystem().setRootPath(jobFsPath);
-				fsExampleInputs = fsExampleInputs.appendToRootPath(job.item.inputDir());
-				return DockerJobTools.copyInternal(fsInputs, fsExampleInputs);
+				var fsExampleInputs = fs.clone().appendToRootPath(job.item.inputDir());
+				return DockerJobTools.copyInternal(fsInputs, fsExampleInputs)
+					.pipe(function(_) {
+						return fsExampleInputs.listDir()
+							.then(function(files) {
+								return true;
+							});
+						});
 			})
 			.pipe(function(_) {
 				return BatchComputeDocker.executeJob(redis, job, fs, workerStorage, Log.log).promise;
@@ -327,7 +329,7 @@ class TestDockerCompute extends TestComputeBase
 	}
 
 	@timeout(60000)
-	public function testDataInOutDataVolumeContainer()
+	public function XtestDataInOutDataVolumeContainer()
 	{
 		var worker = WorkerProviderBoot2Docker.getLocalDockerWorker();
 		var docker = new Docker(worker.docker);
@@ -426,7 +428,7 @@ class TestDockerCompute extends TestComputeBase
 	 * <ROOT>job/<JOB_ID>/inputs etc.
 	 */
 	@timeout(60000)
-	public function testCustomOutputsPath()
+	public function XtestCustomOutputsPath()
 	{
 		var dateString = TestTools.getDateString();
 		var basedir = 'tmp/testCustomOutputsPath/$dateString/';
@@ -461,13 +463,13 @@ class TestDockerCompute extends TestComputeBase
 
 		var redis :RedisClient = _injector.getValue(js.npm.RedisClient);
 
-		var command = ['/bin/bash', '/${DIRECTORY_INPUTS}/$scriptName'];
+		var command = ['/bin/sh', '/${DIRECTORY_INPUTS}/$scriptName'];
 
 		var dockerJob :DockerJobDefinition = {
 			jobId: jobId,
 			computeJobId: computeJobId,
 			worker: worker,
-			image: {type:DockerImageSourceType.Image, value:'ubuntu:14.10'},
+			image: {type:DockerImageSourceType.Image, value:DOCKER_IMAGE_DEFAULT},
 			inputs: FsExtended.listFilesSync(inputDirLocalFull),
 			command: command,
 			inputsPath: inputDir,
@@ -496,7 +498,7 @@ class TestDockerCompute extends TestComputeBase
 			})
 			.errorPipe(function(err) {
 				Log.error(err);
-				return Promise.promise({exitCode:0, outputFiles:[]});
+				return Promise.promise({exitCode:0, copiedLogs:false, outputFiles:[]});
 			})
 			.pipe(function(_) {
 				return DockerJobTools.removeJobContainer(job);

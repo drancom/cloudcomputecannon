@@ -1,16 +1,18 @@
 #Builds ALL haxe projects, apps, client libraries, etc
 
--cmd echo "Building all server tests"
-
---next
-
-test/testsCompile.hxml
-
 -cmd echo "Building server"
 
 --next
 
 etc/hxml/server-build.hxml
+
+--next
+
+-cmd echo "Building all server tests"
+
+--next
+
+test/testsCompile.hxml
 
 -cmd echo "Building CLI tool"
 
